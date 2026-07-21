@@ -11,12 +11,35 @@ AetherGuard is an onboard framework for satellite collision avoidance and self-h
 - **Environment**: Python 3.10+
 - **Install**: `pip install -r requirements.txt`
 - **Test**: `pytest tests/` (Always run the test suite before proposing a commit)
-- **Git**: Always create and work on `feature/` branches. Never push directly to the `main` branch.
+- **Git**: Commit and push directly to `main`. Do not open feature branches. Because there is no review gate, `pytest tests/` must pass before every push.
 
 ## Repository Map
+- `main.py`: FastAPI application entry point.
 - `aether_core.py`: The critical shared data contract.
-- `trajectory_engine.py`: Contains the `TrajectoryOptimizer` for maneuver planning and self-healing evaluation.
+- `api/routes.py`: HTTP route handlers.
+- `engine/`: Physics and astrodynamics.
+  - `collision.py`: Encounter-plane probability of collision (Foster–Chan / Patera).
+  - `frames.py`: RTN/RIC ↔ TEME covariance transforms.
+  - `propagator.py`: SGP4 / Skyfield TLE propagation to state vectors.
+  - `trajectory.py`: `TrajectoryOptimizer` for maneuver planning and self-healing evaluation.
+- `schemas/conjunction.py`: Pydantic request/response models.
 - `tests/`: Pytest unit testing suite.
+
+## File Placement
+Every new file goes in the directory matching its use case. Never add source
+files to the repository root — `main.py` and `aether_core.py` are the only two
+that belong there.
+
+| Use case | Location |
+| --- | --- |
+| HTTP endpoint, request routing | `api/` |
+| Orbital mechanics, probability, frame maths | `engine/` |
+| Pydantic wire models for the API | `schemas/` |
+| Tests, named `test_<module>.py` | `tests/` |
+
+Before creating a file, check whether an existing module in the target
+directory already covers the concern and extend it instead. When a file moves,
+update its importers and the Repository Map above in the same commit.
 
 ## Strict Rules & Guardrails
 - **IMMUTABLE CONTRACT**: You are strictly forbidden from modifying `aether_core.py` without explicit user permission. The `ConjunctionEvent` and `ManeuverPlan` dataclasses must remain exactly as defined to ensure cross-module compatibility with external APIs.
