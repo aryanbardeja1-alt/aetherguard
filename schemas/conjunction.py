@@ -101,6 +101,16 @@ class ConjunctionAssessRequest(BaseModel):
         return self
 
 
+class GeoMarker(BaseModel):
+    """Object location for globe rendering."""
+
+    name: str
+    lat_deg: float
+    lon_deg: float
+    alt_km: float
+    position_km: list[float]
+
+
 class ConjunctionAssessResponse(BaseModel):
     """Conjunction assessment result."""
 
@@ -111,6 +121,22 @@ class ConjunctionAssessResponse(BaseModel):
         description="True when Pc exceeds the 1e-4 operational threshold"
     )
     poc_method: Literal["chan", "dblquad"] = "chan"
+    primary: GeoMarker | None = None
+    secondary: GeoMarker | None = None
+
+
+class OrbitTrackRequest(BaseModel):
+    """Sample an orbit track for globe polylines."""
+
+    tle: TLESet
+    start_time: datetime
+    duration_minutes: Annotated[float, Field(gt=0, le=24 * 60)] = 90.0
+    step_seconds: Annotated[float, Field(gt=0, le=600)] = 60.0
+
+
+class OrbitTrackResponse(BaseModel):
+    name: str
+    points: list[GeoMarker]
 
 
 class MeshNodeSyncRequest(BaseModel):
