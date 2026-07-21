@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class RiskLevel(str, Enum):
@@ -45,23 +45,60 @@ Diag3 = Annotated[
     Field(min_length=3, max_length=3, description="Diagonal of 3×3 covariance (km²)"),
 ]
 
+Matrix3 = Annotated[
+    list[list[float]],
+    Field(
+        min_length=3,
+        max_length=3,
+        description="Full 3×3 position covariance (km²), row-major",
+    ),
+]
+
 
 class ConjunctionAssessRequest(BaseModel):
-    """Payload for ``POST /api/v1/assess-conjunction``."""
+    """Payload for ``POST /api/v1/assess-conjunction``.
+
+    Supply either full matrices (``P1`` / ``P2``) or diagonals (``P1_diag`` /
+    ``P2_diag``). CDM-style covariances should use ``covariance_frame="RTN"``.
+    """
 
     primary_tle: TLESet
     secondary_tle: TLESet
     target_time: datetime
-    P1_diag: Diag3
-    P2_diag: Diag3
     hbr_meters: Annotated[float, Field(gt=0, description="Hard-body radius (m)")]
+    P1: Matrix3 | None = None
+    P2: Matrix3 | None = None
+    P1_diag: Diag3 | None = None
+    P2_diag: Diag3 | None = None
+    covariance_frame: Literal["TEME", "RTN"] = "TEME"
+    poc_method: Literal["chan", "dblquad"] = "chan"
+
+    @field_validator("P1", "P2")
+    @classmethod
+    def validate_matrix(cls, value: list[list[float]] | None) -> list[list[float]] | None:
+        if value is None:
+            return value
+        for row in value:
+            if len(row) != 3:
+                raise ValueError("Each covariance row must have exactly 3 elements.")
+        return value
 
     @field_validator("P1_diag", "P2_diag")
     @classmethod
-    def positive_variances(cls, value: list[float]) -> list[float]:
-        if any(v <= 0 for v in value):
+    def positive_variances(cls, value: list[float] | None) -> list[float] | None:
+        if value is not None and any(v <= 0 for v in value):
             raise ValueError("Covariance diagonal elements must be strictly positive.")
         return value
+
+    @model_validator(mode="after")
+    def require_covariance_pair(self) -> Self:
+        has_full = self.P1 is not None and self.P2 is not None
+        has_diag = self.P1_diag is not None and self.P2_diag is not None
+        if not has_full and not has_diag:
+            raise ValueError(
+                "Provide either P1 & P2 (full 3×3) or P1_diag & P2_diag."
+            )
+        return self
 
 
 class ConjunctionAssessResponse(BaseModel):
@@ -73,6 +110,7 @@ class ConjunctionAssessResponse(BaseModel):
     action_required: bool = Field(
         description="True when Pc exceeds the 1e-4 operational threshold"
     )
+    poc_method: Literal["chan", "dblquad"] = "chan"
 
 
 class MeshNodeSyncRequest(BaseModel):

@@ -36,7 +36,7 @@ def health() -> dict[str, str]:
 
 @router.post("/api/v1/assess-conjunction", response_model=ConjunctionAssessResponse)
 def assess_conjunction(payload: ConjunctionAssessRequest) -> ConjunctionAssessResponse:
-    """Propagate TLEs, project covariances onto the B-plane, and compute Pc."""
+    """Propagate TLEs, rotate/project covariances, and compute Pc (Chan by default)."""
     try:
         primary = propagate_tle(
             payload.primary_tle.line1,
@@ -54,9 +54,17 @@ def assess_conjunction(payload: ConjunctionAssessRequest) -> ConjunctionAssessRe
         result = assess_collision(
             r_rel_km=r_rel,
             v_rel_km_s=v_rel,
+            p1_km2=payload.P1,
+            p2_km2=payload.P2,
             p1_diag_km2=payload.P1_diag,
             p2_diag_km2=payload.P2_diag,
             hbr_meters=payload.hbr_meters,
+            covariance_frame=payload.covariance_frame,
+            primary_position_km=primary.position_km,
+            primary_velocity_km_s=primary.velocity_km_s,
+            secondary_position_km=secondary.position_km,
+            secondary_velocity_km_s=secondary.velocity_km_s,
+            method=payload.poc_method,
         )
     except PropagationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -74,6 +82,7 @@ def assess_conjunction(payload: ConjunctionAssessRequest) -> ConjunctionAssessRe
         poc=result.poc,
         risk_level=RiskLevel(risk),
         action_required=result.poc > ACTION_PC_THRESHOLD,
+        poc_method=result.method,  # type: ignore[arg-type]
     )
 
 
@@ -87,10 +96,7 @@ def mesh_node_sync(payload: MeshNodeSyncRequest) -> MeshNodeSyncResponse:
     neighbors = _MESH_NEIGHBORS.get(payload.node_id, ["NODE-GATEWAY"])
     speed = sum(v * v for v in payload.velocity) ** 0.5
 
-    # Prefer the first registered neighbour; fall back to the gateway hub.
     next_hop = neighbors[0] if neighbors else "NODE-GATEWAY"
-
-    # High residual rate or an imminent burn both trigger active reroute.
     reroute = bool(payload.burn_scheduled or speed > 10.0)
 
     if not reroute:
