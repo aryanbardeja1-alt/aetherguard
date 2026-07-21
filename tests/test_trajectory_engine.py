@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from aether_core import ConjunctionEvent, ManeuverPlan
-from trajectory_engine import (
+from engine.trajectory import (
     MESH_SAFE_SEPARATION_KM,
     SAFE_PROBABILITY,
     ManeuverConstraintError,
