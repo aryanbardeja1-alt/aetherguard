@@ -1,13 +1,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-<<<<<<< HEAD
 .venv/
 venv/
 .env
 *.egg-info/
 .DS_Store
-=======
-venv/
-.venv/
->>>>>>> feature/trajectory-engine
