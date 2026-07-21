@@ -139,6 +139,29 @@ class OrbitTrackResponse(BaseModel):
     points: list[GeoMarker]
 
 
+class SkyTrafficObject(BaseModel):
+    """One catalog object with live-propagated state for the globe."""
+
+    id: str
+    name: str
+    norad_id: int
+    object_type: str
+    lat_deg: float
+    lon_deg: float
+    alt_km: float
+    speed_km_s: float
+    position_km: list[float]
+    velocity_km_s: list[float]
+    line1: str
+    line2: str
+
+
+class SkyTrafficResponse(BaseModel):
+    epoch: datetime
+    count: int
+    satellites: list[SkyTrafficObject]
+
+
 class MeshNodeSyncRequest(BaseModel):
     """Node telemetry ingested by the orbital mesh router."""
 

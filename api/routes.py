@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+import numpy as np
+from fastapi import APIRouter, HTTPException, Query
 
+from engine.catalog import get_entry, load_catalog
 from engine.collision import CovarianceError, assess_collision, classify_risk
 from engine.geo import teme_to_latlon_alt
 from engine.propagator import PropagationError, propagate_tle, relative_state
@@ -18,6 +20,8 @@ from schemas.conjunction import (
     OrbitTrackRequest,
     OrbitTrackResponse,
     RiskLevel,
+    SkyTrafficObject,
+    SkyTrafficResponse,
 )
 
 router = APIRouter()
@@ -47,6 +51,80 @@ def _marker_from_state(name: str, state) -> GeoMarker:
 def health() -> dict[str, str]:
     """Basic operational status check."""
     return {"status": "ok", "service": "AetherGuard"}
+
+
+@router.get("/api/v1/sky-traffic", response_model=SkyTrafficResponse)
+def sky_traffic(
+    epoch: datetime | None = Query(
+        default=None,
+        description="Propagation epoch (UTC). Defaults to now.",
+    ),
+) -> SkyTrafficResponse:
+    """Return the full catalog with every object propagated in one shot."""
+    when = epoch or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+
+    satellites: list[SkyTrafficObject] = []
+    for entry in load_catalog():
+        try:
+            state = propagate_tle(
+                entry["line1"],
+                entry["line2"],
+                when,
+                name=entry["name"],
+            )
+        except PropagationError:
+            continue
+        lat, lon, alt = teme_to_latlon_alt(state.position_km, state.epoch)
+        speed = float(np.linalg.norm(state.velocity_km_s))
+        satellites.append(
+            SkyTrafficObject(
+                id=str(entry["id"]),
+                name=entry["name"],
+                norad_id=int(entry["norad_id"]),
+                object_type=str(entry.get("object_type", "active")),
+                lat_deg=lat,
+                lon_deg=lon,
+                alt_km=alt,
+                speed_km_s=speed,
+                position_km=[float(x) for x in state.position_km],
+                velocity_km_s=[float(x) for x in state.velocity_km_s],
+                line1=entry["line1"],
+                line2=entry["line2"],
+            )
+        )
+
+    return SkyTrafficResponse(epoch=when, count=len(satellites), satellites=satellites)
+
+
+@router.get("/api/v1/sky-traffic/{sat_id}/track", response_model=OrbitTrackResponse)
+def sky_traffic_track(
+    sat_id: str,
+    epoch: datetime | None = Query(default=None),
+    duration_minutes: float = Query(default=92.0, gt=0, le=24 * 60),
+    step_seconds: float = Query(default=90.0, gt=0, le=600),
+) -> OrbitTrackResponse:
+    """Orbit polyline for a single catalog object (on expand / select)."""
+    entry = get_entry(sat_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Unknown satellite id '{sat_id}'.")
+
+    when = epoch or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+
+    points: list[GeoMarker] = []
+    try:
+        steps = min(int(duration_minutes * 60.0 / step_seconds) + 1, 500)
+        for i in range(steps):
+            t = when + timedelta(seconds=i * step_seconds)
+            state = propagate_tle(entry["line1"], entry["line2"], t, name=entry["name"])
+            points.append(_marker_from_state(entry["name"], state))
+    except PropagationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return OrbitTrackResponse(name=entry["name"], points=points)
 
 
 @router.post("/api/v1/assess-conjunction", response_model=ConjunctionAssessResponse)

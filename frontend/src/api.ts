@@ -29,6 +29,27 @@ export type TleInput = {
   line2: string;
 };
 
+export type SkyTrafficSat = {
+  id: string;
+  name: string;
+  norad_id: number;
+  object_type: string;
+  lat_deg: number;
+  lon_deg: number;
+  alt_km: number;
+  speed_km_s: number;
+  position_km: number[];
+  velocity_km_s: number[];
+  line1: string;
+  line2: string;
+};
+
+export type SkyTrafficResponse = {
+  epoch: string;
+  count: number;
+  satellites: SkyTrafficSat[];
+};
+
 async function readError(res: Response): Promise<string> {
   try {
     const body = await res.json();
@@ -39,31 +60,23 @@ async function readError(res: Response): Promise<string> {
   }
 }
 
+export async function fetchSkyTraffic(): Promise<SkyTrafficResponse> {
+  const res = await fetch("/api/v1/sky-traffic");
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export async function fetchSatTrack(satId: string): Promise<OrbitTrackResponse> {
+  const res = await fetch(`/api/v1/sky-traffic/${encodeURIComponent(satId)}/track`);
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
 export async function assessConjunction(payload: unknown): Promise<AssessResponse> {
   const res = await fetch("/api/v1/assess-conjunction", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(await readError(res));
-  return res.json();
-}
-
-export async function fetchOrbitTrack(
-  tle: TleInput,
-  startTime: string,
-  durationMinutes = 92,
-  stepSeconds = 90,
-): Promise<OrbitTrackResponse> {
-  const res = await fetch("/api/v1/orbit-track", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      tle,
-      start_time: startTime,
-      duration_minutes: durationMinutes,
-      step_seconds: stepSeconds,
-    }),
   });
   if (!res.ok) throw new Error(await readError(res));
   return res.json();

@@ -363,3 +363,23 @@ def test_assess_conjunction_distinct_objects() -> None:
         assert body["risk_level"] in {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
         assert isinstance(body["action_required"], bool)
         assert body["dca_km"] > 0.0
+
+
+def test_sky_traffic_returns_full_catalog() -> None:
+    response = client.get("/api/v1/sky-traffic")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] >= 50
+    assert len(body["satellites"]) == body["count"]
+    sample = body["satellites"][0]
+    assert {"id", "name", "lat_deg", "lon_deg", "alt_km", "line1", "line2"} <= set(sample)
+
+
+def test_sky_traffic_track_for_selected_sat() -> None:
+    traffic = client.get("/api/v1/sky-traffic").json()
+    sat_id = traffic["satellites"][0]["id"]
+    response = client.get(f"/api/v1/sky-traffic/{sat_id}/track")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["points"]) > 10
+    assert "lat_deg" in body["points"][0]

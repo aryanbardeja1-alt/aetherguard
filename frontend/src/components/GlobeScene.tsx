@@ -1,13 +1,13 @@
 import { useMemo, useRef } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
-import { Line, OrbitControls, Stars } from "@react-three/drei";
+import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
+import { Html, Line, OrbitControls, Stars } from "@react-three/drei";
 import * as THREE from "three";
-import type { AssessResponse, GeoMarker } from "../api";
+import type { AssessResponse, GeoMarker, SkyTrafficSat } from "../api";
 
 const EARTH_R = 1;
 
-function latLonToVec3(lat: number, lon: number, altKm: number, scale = EARTH_R): THREE.Vector3 {
-  const radius = scale * (1 + altKm / 6378.137);
+export function latLonToVec3(lat: number, lon: number, altKm: number, scale = EARTH_R): THREE.Vector3 {
+  const radius = scale * (1 + Math.max(altKm, 150) / 6378.137);
   const phi = THREE.MathUtils.degToRad(90 - lat);
   const theta = THREE.MathUtils.degToRad(lon + 180);
   return new THREE.Vector3(
@@ -17,18 +17,23 @@ function latLonToVec3(lat: number, lon: number, altKm: number, scale = EARTH_R):
   );
 }
 
+function typeColor(objectType: string): string {
+  switch (objectType) {
+    case "station":
+      return "#d4a574";
+    case "visual":
+      return "#7eb8a8";
+    case "debris":
+      return "#e09b3d";
+    default:
+      return "#9aa8b5";
+  }
+}
+
 function Earth() {
-  const earthRef = useRef<THREE.Mesh>(null);
-  const cloudRef = useRef<THREE.Mesh>(null);
-
-  useFrame((_, delta) => {
-    if (earthRef.current) earthRef.current.rotation.y += delta * 0.028;
-    if (cloudRef.current) cloudRef.current.rotation.y += delta * 0.034;
-  });
-
   return (
     <group>
-      <mesh ref={earthRef}>
+      <mesh>
         <sphereGeometry args={[EARTH_R, 64, 64]} />
         <meshStandardMaterial
           color="#1c4a5c"
@@ -38,7 +43,7 @@ function Earth() {
           emissiveIntensity={0.15}
         />
       </mesh>
-      <mesh ref={cloudRef} scale={1.012}>
+      <mesh scale={1.012}>
         <sphereGeometry args={[EARTH_R, 48, 48]} />
         <meshStandardMaterial
           color="#8ec8c0"
@@ -51,7 +56,7 @@ function Earth() {
       </mesh>
       <mesh scale={1.004}>
         <sphereGeometry args={[EARTH_R, 48, 48]} />
-        <meshBasicMaterial color="#d4a574" wireframe transparent opacity={0.045} />
+        <meshBasicMaterial color="#d4a574" wireframe transparent opacity={0.04} />
       </mesh>
       <mesh scale={1.045}>
         <sphereGeometry args={[EARTH_R, 32, 32]} />
@@ -70,43 +75,56 @@ function Earth() {
 function OrbitPath({ points, color }: { points: GeoMarker[]; color: string }) {
   const pathPoints = useMemo(() => {
     if (points.length < 2) return null;
-    return points.map((p) =>
-      latLonToVec3(p.lat_deg, p.lon_deg, Math.max(p.alt_km, 200)).toArray(),
-    ) as [number, number, number][];
+    return points.map((p) => latLonToVec3(p.lat_deg, p.lon_deg, p.alt_km).toArray()) as [
+      number,
+      number,
+      number,
+    ][];
   }, [points]);
 
   if (!pathPoints) return null;
-  return <Line points={pathPoints} color={color} lineWidth={1.25} transparent opacity={0.85} />;
+  return <Line points={pathPoints} color={color} lineWidth={1.4} transparent opacity={0.9} />;
 }
 
-function SatMarker({
-  marker,
-  color,
-  pulse,
+function TrafficMarker({
+  sat,
+  selected,
+  onSelect,
 }: {
-  marker: GeoMarker;
-  color: string;
-  pulse?: boolean;
+  sat: SkyTrafficSat;
+  selected: boolean;
+  onSelect: (id: string) => void;
 }) {
   const ref = useRef<THREE.Mesh>(null);
-  const pos = latLonToVec3(marker.lat_deg, marker.lon_deg, Math.max(marker.alt_km, 200));
+  const color = typeColor(sat.object_type);
+  const pos = latLonToVec3(sat.lat_deg, sat.lon_deg, sat.alt_km);
 
   useFrame(({ clock }) => {
-    if (!ref.current || !pulse) return;
-    const s = 1 + Math.sin(clock.elapsedTime * 3.2) * 0.22;
-    ref.current.scale.setScalar(s);
+    if (!ref.current || !selected) return;
+    ref.current.scale.setScalar(1 + Math.sin(clock.elapsedTime * 3.5) * 0.2);
   });
+
+  const handleClick = (event: ThreeEvent<MouseEvent>) => {
+    event.stopPropagation();
+    onSelect(sat.id);
+  };
 
   return (
     <group position={pos}>
-      <mesh ref={ref}>
-        <sphereGeometry args={[0.028, 16, 16]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} roughness={0.4} />
+      <mesh ref={ref} onClick={handleClick} onPointerOver={() => { document.body.style.cursor = "pointer"; }} onPointerOut={() => { document.body.style.cursor = "default"; }}>
+        <sphereGeometry args={[selected ? 0.032 : 0.016, 12, 12]} />
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={selected ? 0.55 : 0.25}
+          roughness={0.35}
+        />
       </mesh>
-      <mesh>
-        <sphereGeometry args={[0.05, 12, 12]} />
-        <meshBasicMaterial color={color} transparent opacity={0.18} depthWrite={false} />
-      </mesh>
+      {selected && (
+        <Html distanceFactor={6} style={{ pointerEvents: "none" }}>
+          <div className="sat-tag">{sat.name}</div>
+        </Html>
+      )}
     </group>
   );
 }
@@ -117,8 +135,8 @@ function LinkLine({ a, b, risk }: { a: GeoMarker; b: GeoMarker; risk: string }) 
   const points = useMemo(
     () =>
       [
-        latLonToVec3(a.lat_deg, a.lon_deg, Math.max(a.alt_km, 200)).toArray(),
-        latLonToVec3(b.lat_deg, b.lon_deg, Math.max(b.alt_km, 200)).toArray(),
+        latLonToVec3(a.lat_deg, a.lon_deg, a.alt_km).toArray(),
+        latLonToVec3(b.lat_deg, b.lon_deg, b.alt_km).toArray(),
       ] as [number, number, number][],
     [a, b],
   );
@@ -126,40 +144,46 @@ function LinkLine({ a, b, risk }: { a: GeoMarker; b: GeoMarker; risk: string }) 
 }
 
 type GlobeSceneProps = {
+  traffic: SkyTrafficSat[];
+  selectedId: string | null;
+  selectedTrack: GeoMarker[];
   result: AssessResponse | null;
-  primaryTrack: GeoMarker[];
-  secondaryTrack: GeoMarker[];
+  onSelect: (id: string) => void;
 };
 
-export default function GlobeScene({ result, primaryTrack, secondaryTrack }: GlobeSceneProps) {
+export default function GlobeScene({
+  traffic,
+  selectedId,
+  selectedTrack,
+  result,
+  onSelect,
+}: GlobeSceneProps) {
   return (
     <Canvas
       className="globe-canvas"
-      camera={{ position: [0, 0.6, 2.65], fov: 42, near: 0.1, far: 100 }}
-      dpr={[1, 1.75]}
+      camera={{ position: [0, 0.55, 2.7], fov: 42, near: 0.1, far: 100 }}
+      dpr={[1, 1.6]}
+      onPointerMissed={() => onSelect("")}
     >
       <color attach="background" args={["#070b10"]} />
       <ambientLight intensity={0.45} />
       <directionalLight position={[4, 2, 3]} intensity={1.35} color="#fff4e6" />
       <directionalLight position={[-3, -1, -2]} intensity={0.35} color="#6a9eab" />
-      <Stars radius={80} depth={40} count={3500} factor={3.2} saturation={0} fade speed={0.4} />
+      <Stars radius={80} depth={40} count={3200} factor={3.1} saturation={0} fade speed={0.35} />
       <Earth />
-      {primaryTrack.length > 0 && <OrbitPath points={primaryTrack} color="#d4a574" />}
-      {secondaryTrack.length > 0 && <OrbitPath points={secondaryTrack} color="#7eb8a8" />}
-      {result?.primary && (
-        <SatMarker marker={result.primary} color="#d4a574" pulse={result.action_required} />
-      )}
-      {result?.secondary && <SatMarker marker={result.secondary} color="#7eb8a8" />}
+      {traffic.map((sat) => (
+        <TrafficMarker
+          key={sat.id}
+          sat={sat}
+          selected={sat.id === selectedId}
+          onSelect={onSelect}
+        />
+      ))}
+      {selectedTrack.length > 0 && <OrbitPath points={selectedTrack} color="#d4a574" />}
       {result?.primary && result?.secondary && (
         <LinkLine a={result.primary} b={result.secondary} risk={result.risk_level} />
       )}
-      <OrbitControls
-        enablePan={false}
-        minDistance={1.6}
-        maxDistance={5}
-        autoRotate={!result}
-        autoRotateSpeed={0.35}
-      />
+      <OrbitControls enablePan={false} minDistance={1.55} maxDistance={5.5} autoRotate={false} />
     </Canvas>
   );
 }
