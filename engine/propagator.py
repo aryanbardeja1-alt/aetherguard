@@ -78,40 +78,24 @@ def propagate_tle(
     target_time: datetime,
     *,
     name: str = "UNKNOWN",
+    validate_with_skyfield: bool = True,
 ) -> StateVector:
     """Propagate a two-line element set to ``target_time`` in the TEME frame.
 
-    Uses ``sgp4`` for the core TEME ECI state and ``skyfield`` to cross-check
-    that the TLE is parseable as an EarthSatellite (WGS72 / SGP4).
-
-    Parameters
-    ----------
-    line1, line2:
-        NORAD two-line element strings.
-    target_time:
-        Propagation epoch (naive datetimes are treated as UTC).
-    name:
-        Optional catalog name used when constructing the Skyfield satellite.
-
-    Returns
-    -------
-    StateVector
-        TEME position (km) and velocity (km/s) at ``target_time``.
-
-    Raises
-    ------
-    PropagationError
-        If the TLE is malformed or SGP4 reports a non-zero error code.
+    Uses ``sgp4`` for the core TEME ECI state. Optionally gates through
+    ``skyfield`` for parse validation (disable for bulk catalog traffic).
     """
     l1, l2 = _normalize_tle_lines(line1, line2)
     epoch = _to_utc(target_time)
 
-    # Skyfield parse gate — surfaces malformed TLEs early with a clear error.
-    try:
-        ts = load.timescale()
-        _ = EarthSatellite(l1, l2, name, ts)
-    except Exception as exc:  # noqa: BLE001 — Skyfield raises varied types
-        raise PropagationError(f"Skyfield failed to parse TLE '{name}': {exc}") from exc
+    if validate_with_skyfield:
+        try:
+            ts = load.timescale()
+            _ = EarthSatellite(l1, l2, name, ts)
+        except Exception as exc:  # noqa: BLE001 — Skyfield raises varied types
+            raise PropagationError(
+                f"Skyfield failed to parse TLE '{name}': {exc}"
+            ) from exc
 
     satellite = Satrec.twoline2rv(l1, l2)
     jd, fr = jday(
@@ -130,11 +114,12 @@ def propagate_tle(
             f"(error code {error_code})."
         )
 
-    return StateVector(
-        position_km=np.asarray(position, dtype=np.float64),
-        velocity_km_s=np.asarray(velocity, dtype=np.float64),
-        epoch=epoch,
-    )
+    pos = np.asarray(position, dtype=np.float64)
+    vel = np.asarray(velocity, dtype=np.float64)
+    if not np.all(np.isfinite(pos)) or not np.all(np.isfinite(vel)):
+        raise PropagationError(f"Non-finite state for '{name}' at {epoch.isoformat()}.")
+
+    return StateVector(position_km=pos, velocity_km_s=vel, epoch=epoch)
 
 
 def relative_state(

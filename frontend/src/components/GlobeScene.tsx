@@ -5,9 +5,27 @@ import * as THREE from "three";
 import type { AssessResponse, GeoMarker, SkyTrafficSat } from "../api";
 
 const EARTH_R = 1;
+const EARTH_KM = 6378.137;
+
+/**
+ * Compress true altitude so LEO / MEO / GEO / HEO all stay in camera range.
+ * Without this, GEO (~36e3 km) and HEO (>1e5 km) render far off-screen and
+ * look like they "failed to load".
+ */
+export function displayAltitudeKm(altKm: number): number {
+  const alt = Math.max(altKm, 120);
+  if (alt <= 2000) return alt;
+  if (alt <= 40000) {
+    // MEO → GEO: map 2e3–40e3 into 2e3–9000 visual km (~1.3–2.4 R)
+    const t = (alt - 2000) / (40000 - 2000);
+    return 2000 + t * 7000;
+  }
+  // Deep HEO / science: soft log so Cluster/CXO stay near ~2.8 R
+  return 9000 + Math.log10(1 + (alt - 40000) / 20000) * 4000;
+}
 
 export function latLonToVec3(lat: number, lon: number, altKm: number, scale = EARTH_R): THREE.Vector3 {
-  const radius = scale * (1 + Math.max(altKm, 150) / 6378.137);
+  const radius = scale * (1 + displayAltitudeKm(altKm) / EARTH_KM);
   const phi = THREE.MathUtils.degToRad(90 - lat);
   const theta = THREE.MathUtils.degToRad(lon + 180);
   return new THREE.Vector3(
@@ -28,6 +46,11 @@ function typeColor(objectType: string): string {
     default:
       return "#9aa8b5";
   }
+}
+
+function markerSize(altKm: number, selected: boolean): number {
+  const base = altKm > 10000 ? 0.024 : 0.016;
+  return selected ? base * 1.85 : base;
 }
 
 function Earth() {
@@ -72,18 +95,34 @@ function Earth() {
   );
 }
 
+/** Split orbit polylines when they wrap the antimeridian so lines don't streak across Earth. */
 function OrbitPath({ points, color }: { points: GeoMarker[]; color: string }) {
-  const pathPoints = useMemo(() => {
-    if (points.length < 2) return null;
-    return points.map((p) => latLonToVec3(p.lat_deg, p.lon_deg, p.alt_km).toArray()) as [
-      number,
-      number,
-      number,
-    ][];
+  const segments = useMemo(() => {
+    if (points.length < 2) return [];
+    const segs: [number, number, number][][] = [];
+    let current: [number, number, number][] = [];
+    let prevLon: number | null = null;
+
+    for (const p of points) {
+      if (!Number.isFinite(p.lat_deg) || !Number.isFinite(p.lon_deg)) continue;
+      if (prevLon !== null && Math.abs(p.lon_deg - prevLon) > 180) {
+        if (current.length >= 2) segs.push(current);
+        current = [];
+      }
+      current.push(latLonToVec3(p.lat_deg, p.lon_deg, p.alt_km).toArray() as [number, number, number]);
+      prevLon = p.lon_deg;
+    }
+    if (current.length >= 2) segs.push(current);
+    return segs;
   }, [points]);
 
-  if (!pathPoints) return null;
-  return <Line points={pathPoints} color={color} lineWidth={1.4} transparent opacity={0.9} />;
+  return (
+    <>
+      {segments.map((pts, i) => (
+        <Line key={i} points={pts} color={color} lineWidth={1.4} transparent opacity={0.9} />
+      ))}
+    </>
+  );
 }
 
 function TrafficMarker({
@@ -98,6 +137,7 @@ function TrafficMarker({
   const ref = useRef<THREE.Mesh>(null);
   const color = typeColor(sat.object_type);
   const pos = latLonToVec3(sat.lat_deg, sat.lon_deg, sat.alt_km);
+  const size = markerSize(sat.alt_km, selected);
 
   useFrame(({ clock }) => {
     if (!ref.current || !selected) return;
@@ -111,17 +151,30 @@ function TrafficMarker({
 
   return (
     <group position={pos}>
-      <mesh ref={ref} onClick={handleClick} onPointerOver={() => { document.body.style.cursor = "pointer"; }} onPointerOut={() => { document.body.style.cursor = "default"; }}>
-        <sphereGeometry args={[selected ? 0.032 : 0.016, 12, 12]} />
+      {/* Larger invisible hit target so crowded LEO sats stay clickable */}
+      <mesh
+        onClick={handleClick}
+        onPointerOver={() => {
+          document.body.style.cursor = "pointer";
+        }}
+        onPointerOut={() => {
+          document.body.style.cursor = "default";
+        }}
+      >
+        <sphereGeometry args={[Math.max(size * 2.8, 0.04), 8, 8]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+      <mesh ref={ref}>
+        <sphereGeometry args={[size, 12, 12]} />
         <meshStandardMaterial
           color={color}
           emissive={color}
-          emissiveIntensity={selected ? 0.55 : 0.25}
+          emissiveIntensity={selected ? 0.55 : 0.28}
           roughness={0.35}
         />
       </mesh>
       {selected && (
-        <Html distanceFactor={6} style={{ pointerEvents: "none" }}>
+        <Html distanceFactor={7} style={{ pointerEvents: "none" }}>
           <div className="sat-tag">{sat.name}</div>
         </Html>
       )}
@@ -161,7 +214,7 @@ export default function GlobeScene({
   return (
     <Canvas
       className="globe-canvas"
-      camera={{ position: [0, 0.55, 2.7], fov: 42, near: 0.1, far: 100 }}
+      camera={{ position: [0, 0.7, 3.2], fov: 42, near: 0.1, far: 200 }}
       dpr={[1, 1.6]}
       onPointerMissed={() => onSelect("")}
     >
@@ -183,7 +236,7 @@ export default function GlobeScene({
       {result?.primary && result?.secondary && (
         <LinkLine a={result.primary} b={result.secondary} risk={result.risk_level} />
       )}
-      <OrbitControls enablePan={false} minDistance={1.55} maxDistance={5.5} autoRotate={false} />
+      <OrbitControls enablePan={false} minDistance={1.55} maxDistance={12} autoRotate={false} />
     </Canvas>
   );
 }

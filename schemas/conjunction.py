@@ -159,6 +159,8 @@ class SkyTrafficObject(BaseModel):
 class SkyTrafficResponse(BaseModel):
     epoch: datetime
     count: int
+    catalog_size: int = 0
+    skipped: int = 0
     satellites: list[SkyTrafficObject]
 
 

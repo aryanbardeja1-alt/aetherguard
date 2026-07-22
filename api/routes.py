@@ -65,18 +65,25 @@ def sky_traffic(
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
 
+    catalog = load_catalog()
     satellites: list[SkyTrafficObject] = []
-    for entry in load_catalog():
+    skipped = 0
+    for entry in catalog:
         try:
             state = propagate_tle(
                 entry["line1"],
                 entry["line2"],
                 when,
                 name=entry["name"],
+                validate_with_skyfield=False,
             )
         except PropagationError:
+            skipped += 1
             continue
         lat, lon, alt = teme_to_latlon_alt(state.position_km, state.epoch)
+        if not np.isfinite(lat) or not np.isfinite(lon) or not np.isfinite(alt):
+            skipped += 1
+            continue
         speed = float(np.linalg.norm(state.velocity_km_s))
         satellites.append(
             SkyTrafficObject(
@@ -95,7 +102,13 @@ def sky_traffic(
             )
         )
 
-    return SkyTrafficResponse(epoch=when, count=len(satellites), satellites=satellites)
+    return SkyTrafficResponse(
+        epoch=when,
+        count=len(satellites),
+        catalog_size=len(catalog),
+        skipped=skipped,
+        satellites=satellites,
+    )
 
 
 @router.get("/api/v1/sky-traffic/{sat_id}/track", response_model=OrbitTrackResponse)
@@ -119,10 +132,19 @@ def sky_traffic_track(
         steps = min(int(duration_minutes * 60.0 / step_seconds) + 1, 500)
         for i in range(steps):
             t = when + timedelta(seconds=i * step_seconds)
-            state = propagate_tle(entry["line1"], entry["line2"], t, name=entry["name"])
+            state = propagate_tle(
+                entry["line1"],
+                entry["line2"],
+                t,
+                name=entry["name"],
+                validate_with_skyfield=False,
+            )
             points.append(_marker_from_state(entry["name"], state))
     except PropagationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if len(points) < 2:
+        raise HTTPException(status_code=422, detail="Orbit track produced too few points.")
 
     return OrbitTrackResponse(name=entry["name"], points=points)
 

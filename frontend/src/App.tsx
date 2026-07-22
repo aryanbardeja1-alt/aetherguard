@@ -23,6 +23,7 @@ export default function App() {
   const [assessError, setAssessError] = useState<string | null>(null);
   const [result, setResult] = useState<AssessResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [catalogMeta, setCatalogMeta] = useState<{ count: number; skipped: number } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -44,6 +45,7 @@ export default function App() {
     try {
       const data = await fetchSkyTraffic();
       setTraffic(data.satellites);
+      setCatalogMeta({ count: data.count, skipped: data.skipped ?? 0 });
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Failed to load sky traffic");
     } finally {
@@ -68,8 +70,9 @@ export default function App() {
       try {
         const track = await fetchSatTrack(id);
         setSelectedTrack(track.points);
-      } catch {
+      } catch (err) {
         setSelectedTrack([]);
+        setLoadError(err instanceof Error ? `Orbit track: ${err.message}` : "Orbit track failed");
       }
     },
     [],
@@ -129,6 +132,9 @@ export default function App() {
         <h1 className="brand">AetherGuard</h1>
         <p className="tagline">
           Click any satellite to expand — full catalog on the globe, no manual fetch.
+          {catalogMeta
+            ? ` ${catalogMeta.count} on orbit${catalogMeta.skipped ? ` (${catalogMeta.skipped} skipped)` : ""}.`
+            : ""}
         </p>
         {loadError && <p className="hero-error">{loadError}</p>}
       </header>

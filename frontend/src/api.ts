@@ -47,6 +47,8 @@ export type SkyTrafficSat = {
 export type SkyTrafficResponse = {
   epoch: string;
   count: number;
+  catalog_size?: number;
+  skipped?: number;
   satellites: SkyTrafficSat[];
 };
 
