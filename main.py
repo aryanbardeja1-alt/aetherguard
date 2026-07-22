@@ -56,13 +56,13 @@ if FRONTEND_DIST.is_dir():
     if assets.is_dir():
         app.mount("/assets", StaticFiles(directory=assets), name="assets")
 
-    @app.get("/")
+    @app.api_route("/", methods=["GET", "HEAD"])
     def spa_index() -> FileResponse:
         return FileResponse(FRONTEND_DIST / "index.html")
 
 else:
 
-    @app.get("/")
+    @app.api_route("/", methods=["GET", "HEAD"])
     def root_dev_hint() -> dict[str, str]:
         return {
             "name": "AetherGuard",

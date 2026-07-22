@@ -87,9 +87,13 @@ def _marker_from_state(name: str, state) -> GeoMarker:
     )
 
 
-@router.get("/health")
+@router.api_route("/health", methods=["GET", "HEAD"], response_model=None)
 def health() -> dict[str, str]:
-    """Basic operational status check."""
+    """Basic operational status check.
+
+    Render's free-tier probe uses ``HEAD /health``. A 405 here marks the
+    instance unroutable and the public URL returns plain \"Not Found\".
+    """
     return {"status": "ok", "service": "AetherGuard"}
 
 
