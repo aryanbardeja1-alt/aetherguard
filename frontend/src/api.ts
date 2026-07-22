@@ -86,6 +86,11 @@ export type TestbedDeployResponse = {
   epoch: string;
 };
 
+// Empty means same-origin: the Vite dev proxy in development, and the FastAPI
+// static mount in production. Set VITE_API_BASE_URL when the UI and the API are
+// deployed to different hosts.
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/+$/, "");
+
 async function readError(res: Response): Promise<string> {
   try {
     const body = await res.json();
@@ -97,19 +102,19 @@ async function readError(res: Response): Promise<string> {
 }
 
 export async function fetchSkyTraffic(): Promise<SkyTrafficResponse> {
-  const res = await fetch("/api/v1/sky-traffic");
+  const res = await fetch(`${API_BASE}/api/v1/sky-traffic`);
   if (!res.ok) throw new Error(await readError(res));
   return res.json();
 }
 
 export async function fetchSatTrack(satId: string): Promise<OrbitTrackResponse> {
-  const res = await fetch(`/api/v1/sky-traffic/${encodeURIComponent(satId)}/track`);
+  const res = await fetch(`${API_BASE}/api/v1/sky-traffic/${encodeURIComponent(satId)}/track`);
   if (!res.ok) throw new Error(await readError(res));
   return res.json();
 }
 
 export async function assessConjunction(payload: unknown): Promise<AssessResponse> {
-  const res = await fetch("/api/v1/assess-conjunction", {
+  const res = await fetch(`${API_BASE}/api/v1/assess-conjunction`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -123,7 +128,7 @@ export async function planManeuver(
   secondaryId: string,
   targetTime?: string,
 ): Promise<ManeuverPlan> {
-  const res = await fetch("/api/v1/plan-maneuver", {
+  const res = await fetch(`${API_BASE}/api/v1/plan-maneuver`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -138,7 +143,7 @@ export async function planManeuver(
 }
 
 export async function deployTestbed(): Promise<TestbedDeployResponse> {
-  const res = await fetch("/api/v1/testbed/deploy", {
+  const res = await fetch(`${API_BASE}/api/v1/testbed/deploy`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),
@@ -148,13 +153,13 @@ export async function deployTestbed(): Promise<TestbedDeployResponse> {
 }
 
 export async function clearTestbed(): Promise<void> {
-  const res = await fetch("/api/v1/testbed/deploy", { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/api/v1/testbed/deploy`, { method: "DELETE" });
   if (!res.ok) throw new Error(await readError(res));
 }
 
 export async function checkHealth(): Promise<boolean> {
   try {
-    const res = await fetch("/health");
+    const res = await fetch(`${API_BASE}/health`);
     return res.ok;
   } catch {
     return false;
