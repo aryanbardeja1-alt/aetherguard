@@ -44,6 +44,22 @@ def gmst_radians(epoch: datetime) -> float:
     return float(np.deg2rad(gmst_deg))
 
 
+def teme_to_ecef(
+    position_km: np.ndarray,
+    epoch: datetime,
+    *,
+    gmst: float | None = None,
+) -> np.ndarray:
+    """Rotate TEME → ECEF/PEF about Z using GMST (or a frozen GMST value)."""
+    r = np.asarray(position_km, dtype=np.float64).reshape(3)
+    theta = gmst_radians(epoch) if gmst is None else float(gmst)
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array(
+        [c * r[0] + s * r[1], -s * r[0] + c * r[1], r[2]],
+        dtype=np.float64,
+    )
+
+
 def teme_to_latlon_alt(
     position_km: np.ndarray,
     epoch: datetime,
@@ -54,17 +70,11 @@ def teme_to_latlon_alt(
     -------
     lat_deg, lon_deg, alt_km
     """
-    r = np.asarray(position_km, dtype=np.float64).reshape(3)
-    theta = gmst_radians(epoch)
-    c, s = np.cos(theta), np.sin(theta)
-    # TEME → PEF (Earth-fixed) about Z.
-    x = c * r[0] + s * r[1]
-    y = -s * r[0] + c * r[1]
-    z = r[2]
-
+    ecef = teme_to_ecef(position_km, epoch)
+    x, y, z = ecef
     lon = float(np.rad2deg(np.atan2(y, x)))
     lat = float(np.rad2deg(np.atan2(z, np.hypot(x, y))))
-    alt = float(np.linalg.norm(r) - EARTH_RADIUS_KM)
+    alt = float(np.linalg.norm(ecef) - EARTH_RADIUS_KM)
     return lat, lon, alt
 
 

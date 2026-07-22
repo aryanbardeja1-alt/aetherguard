@@ -59,8 +59,8 @@ body {
   inset: 0;
   z-index: 1;
   background:
-    radial-gradient(ellipse 65% 55% at 58% 48%, transparent 28%, rgba(7, 11, 16, 0.5) 72%, rgba(7, 11, 16, 0.9) 100%),
-    linear-gradient(100deg, rgba(7, 11, 16, 0.72) 0%, transparent 38%, transparent 62%, rgba(7, 11, 16, 0.25) 100%);
+    radial-gradient(ellipse 80% 70% at 55% 48%, transparent 45%, rgba(7, 11, 16, 0.28) 78%, rgba(7, 11, 16, 0.62) 100%),
+    linear-gradient(100deg, rgba(7, 11, 16, 0.45) 0%, transparent 34%, transparent 66%, rgba(7, 11, 16, 0.18) 100%);
 }
 
 .hero {

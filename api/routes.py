@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from engine.catalog import get_entry, load_catalog
 from engine.collision import CovarianceError, assess_collision, classify_risk
-from engine.geo import teme_to_latlon_alt
+from engine.geo import gmst_radians, teme_to_ecef, teme_to_latlon_alt
 from engine.propagator import PropagationError, propagate_tle, relative_state
 from schemas.conjunction import (
     ConjunctionAssessRequest,
@@ -111,14 +111,39 @@ def sky_traffic(
     )
 
 
+def _orbital_period_minutes(line2: str) -> float:
+    """Read mean motion (rev/day) from TLE line 2 → period in minutes."""
+    try:
+        mean_motion = float(line2[52:63].strip())
+    except (TypeError, ValueError):
+        return 92.0
+    if mean_motion <= 1e-6:
+        return 92.0
+    return 1440.0 / mean_motion
+
+
 @router.get("/api/v1/sky-traffic/{sat_id}/track", response_model=OrbitTrackResponse)
 def sky_traffic_track(
     sat_id: str,
     epoch: datetime | None = Query(default=None),
-    duration_minutes: float = Query(default=92.0, gt=0, le=24 * 60),
-    step_seconds: float = Query(default=90.0, gt=0, le=600),
+    duration_minutes: float | None = Query(
+        default=None,
+        gt=0,
+        le=72 * 60,
+        description="Override track length. Default: one full orbit from TLE mean motion.",
+    ),
+    step_seconds: float | None = Query(
+        default=None,
+        gt=0,
+        le=3600,
+        description="Override sample step. Default: adaptive (~180 samples / orbit).",
+    ),
 ) -> OrbitTrackResponse:
-    """Orbit polyline for a single catalog object (on expand / select)."""
+    """Orbit polyline for a single catalog object (on expand / select).
+
+    Defaults to one full revolution so GEO/HEO orbits render completely instead
+    of a LEO-length 92-minute stub.
+    """
     entry = get_entry(sat_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Unknown satellite id '{sat_id}'.")
@@ -127,11 +152,24 @@ def sky_traffic_track(
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
 
+    period_min = _orbital_period_minutes(entry["line2"])
+    track_minutes = float(duration_minutes) if duration_minutes is not None else min(period_min * 1.05, 72 * 60)
+    target_samples = 180
+    sample_dt = (
+        float(step_seconds)
+        if step_seconds is not None
+        else max(20.0, (track_minutes * 60.0) / target_samples)
+    )
+
+    # Freeze Earth rotation at the start epoch so GEO/HEO inertial orbits
+    # render as complete rings instead of collapsing to a ground-track stub.
+    gmst0 = gmst_radians(when)
+
     points: list[GeoMarker] = []
     try:
-        steps = min(int(duration_minutes * 60.0 / step_seconds) + 1, 500)
+        steps = min(int(track_minutes * 60.0 / sample_dt) + 1, 400)
         for i in range(steps):
-            t = when + timedelta(seconds=i * step_seconds)
+            t = when + timedelta(seconds=i * sample_dt)
             state = propagate_tle(
                 entry["line1"],
                 entry["line2"],
@@ -139,7 +177,17 @@ def sky_traffic_track(
                 name=entry["name"],
                 validate_with_skyfield=False,
             )
-            points.append(_marker_from_state(entry["name"], state))
+            lat, lon, alt = teme_to_latlon_alt(state.position_km, state.epoch)
+            ecef = teme_to_ecef(state.position_km, state.epoch, gmst=gmst0)
+            points.append(
+                GeoMarker(
+                    name=entry["name"],
+                    lat_deg=lat,
+                    lon_deg=lon,
+                    alt_km=alt,
+                    position_km=[float(x) for x in ecef],
+                )
+            )
     except PropagationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

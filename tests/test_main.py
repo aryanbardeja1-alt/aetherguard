@@ -384,3 +384,19 @@ def test_sky_traffic_track_for_selected_sat() -> None:
     body = response.json()
     assert len(body["points"]) > 10
     assert "lat_deg" in body["points"][0]
+
+
+def test_sky_traffic_track_covers_full_geo_orbit() -> None:
+    """GEO sats must return a full inertial ring (frozen-ECEF), not a LEO stub."""
+    traffic = client.get("/api/v1/sky-traffic").json()["satellites"]
+    geo = next((s for s in traffic if s["alt_km"] > 30000), None)
+    assert geo is not None
+    response = client.get(f"/api/v1/sky-traffic/{geo['id']}/track")
+    assert response.status_code == 200
+    points = response.json()["points"]
+    assert len(points) >= 100
+    # Inertial GEO path in frozen ECEF should circumnavigate — wide X/Y span.
+    xs = [p["position_km"][0] for p in points]
+    ys = [p["position_km"][1] for p in points]
+    assert max(xs) - min(xs) > 20000
+    assert max(ys) - min(ys) > 20000
