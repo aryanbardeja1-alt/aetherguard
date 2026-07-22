@@ -346,6 +346,12 @@ body {
   margin-top: 0.7rem;
 }
 
+.assess-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 .assess-actions {
   display: flex;
   gap: 0.45rem;
