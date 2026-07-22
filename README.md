@@ -168,9 +168,5 @@ Use `P1` / `P2` (3×3) with `covariance_frame: "RTN"` for CDM-style inputs.
 
 - **Python 3.10+** — FastAPI, Pydantic v2, NumPy, SciPy, SGP4, Skyfield, Astropy, Poliastro  
 - **TypeScript** — React 18, Vite, Three.js, React Three Fiber / Drei  
-
 ---
 
-## License / collaboration
-
-Hackathon collaboration repo: [aryanbardeja1-alt/hackathon](https://github.com/aryanbardeja1-alt/hackathon). Commit and push to `main` after `pytest tests/` passes.
