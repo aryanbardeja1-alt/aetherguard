@@ -52,6 +52,23 @@ export type SkyTrafficResponse = {
   satellites: SkyTrafficSat[];
 };
 
+export type ManeuverPlan = {
+  primary_name: string;
+  secondary_name: string;
+  delta_v_m_s: number[];
+  delta_v_magnitude_m_s: number;
+  burn_time: string;
+  burn_lead_hours: number;
+  poc_before: number;
+  poc_after: number;
+  miss_distance_before_km: number;
+  miss_distance_after_km: number;
+  risk_before: RiskLevel;
+  requires_mesh_rerouting: boolean;
+  baseline_track: GeoMarker[];
+  maneuvered_track: GeoMarker[];
+};
+
 async function readError(res: Response): Promise<string> {
   try {
     const body = await res.json();
@@ -79,6 +96,23 @@ export async function assessConjunction(payload: unknown): Promise<AssessRespons
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export async function planManeuver(
+  primaryId: string,
+  secondaryId: string,
+): Promise<ManeuverPlan> {
+  const res = await fetch("/api/v1/plan-maneuver", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      primary_id: primaryId,
+      secondary_id: secondaryId,
+      hbr_meters: 20,
+    }),
   });
   if (!res.ok) throw new Error(await readError(res));
   return res.json();

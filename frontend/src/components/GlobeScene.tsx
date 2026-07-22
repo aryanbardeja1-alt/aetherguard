@@ -3,7 +3,7 @@ import type { RefObject } from "react";
 import { Canvas, ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { Html, Line, OrbitControls, Stars } from "@react-three/drei";
 import * as THREE from "three";
-import type { AssessResponse, GeoMarker, SkyTrafficSat } from "../api";
+import type { AssessResponse, GeoMarker, ManeuverPlan, SkyTrafficSat } from "../api";
 
 const EARTH_R = 1;
 const EARTH_KM = 6378.137;
@@ -125,8 +125,54 @@ function Earth() {
   );
 }
 
+/**
+ * Baseline (no burn) against post-burn trajectory. Both come from the same
+ * propagator starting at the burn point, so they leave together and the gap
+ * that opens is the maneuver.
+ */
+function ManeuverPaths({ plan }: { plan: ManeuverPlan }) {
+  const burned = plan.delta_v_magnitude_m_s > 0;
+  return (
+    <group>
+      <OrbitPath points={plan.baseline_track} color="#e85d4c" dashed opacity={burned ? 0.55 : 0.9} />
+      {burned && <OrbitPath points={plan.maneuvered_track} color="#7eb8a8" lineWidth={2.4} />}
+      {burned && plan.maneuvered_track.length > 0 && (
+        <BurnMarker point={plan.maneuvered_track[0]} />
+      )}
+    </group>
+  );
+}
+
+/** Where the impulse is applied — the point both tracks share. */
+function BurnMarker({ point }: { point: GeoMarker }) {
+  const pos = useMemo(() => ecefKmToVec3(point.position_km), [point]);
+  return (
+    <group position={pos}>
+      <mesh>
+        <sphereGeometry args={[0.022, 12, 12]} />
+        <meshStandardMaterial color="#f0d98c" emissive="#f0d98c" emissiveIntensity={0.8} />
+      </mesh>
+      <Html distanceFactor={9} style={{ pointerEvents: "none" }} zIndexRange={[100, 0]}>
+        <div className="sat-tag burn">burn</div>
+      </Html>
+    </group>
+  );
+}
+
 /** Prefer frozen-ECEF cartesian rings so GEO/HEO orbits render fully. */
-function OrbitPath({ points, color }: { points: GeoMarker[]; color: string }) {
+function OrbitPath({
+  points,
+  color,
+  dashed = false,
+  lineWidth = 1.6,
+  opacity = 0.92,
+}: {
+  points: GeoMarker[];
+  color: string;
+  dashed?: boolean;
+  lineWidth?: number;
+  opacity?: number;
+}) {
   const pathPoints = useMemo(() => {
     if (points.length < 2) return null;
     const useEcef = points.every((p) => Array.isArray(p.position_km) && p.position_km.length === 3);
@@ -140,7 +186,18 @@ function OrbitPath({ points, color }: { points: GeoMarker[]; color: string }) {
   }, [points]);
 
   if (!pathPoints) return null;
-  return <Line points={pathPoints} color={color} lineWidth={1.6} transparent opacity={0.92} />;
+  return (
+    <Line
+      points={pathPoints}
+      color={color}
+      lineWidth={lineWidth}
+      transparent
+      opacity={opacity}
+      dashed={dashed}
+      dashSize={0.05}
+      gapSize={0.03}
+    />
+  );
 }
 
 function TrafficMarker({
@@ -242,6 +299,7 @@ type GlobeSceneProps = {
   selectedId: string | null;
   selectedTrack: GeoMarker[];
   result: AssessResponse | null;
+  maneuver: ManeuverPlan | null;
   onSelect: (id: string) => void;
 };
 
@@ -250,6 +308,7 @@ export default function GlobeScene({
   selectedId,
   selectedTrack,
   result,
+  maneuver,
   onSelect,
 }: GlobeSceneProps) {
   const controlsRef = useRef(null);
@@ -277,6 +336,7 @@ export default function GlobeScene({
         />
       ))}
       {selectedTrack.length > 0 && <OrbitPath points={selectedTrack} color="#d4a574" />}
+      {maneuver && <ManeuverPaths plan={maneuver} />}
       {result?.primary && result?.secondary && (
         <LinkLine a={result.primary} b={result.secondary} risk={result.risk_level} />
       )}

@@ -6,8 +6,10 @@ import {
   checkHealth,
   fetchSatTrack,
   fetchSkyTraffic,
+  planManeuver,
   type AssessResponse,
   type GeoMarker,
+  type ManeuverPlan,
   type SkyTrafficSat,
 } from "./api";
 
@@ -22,6 +24,9 @@ export default function App() {
   const [assessBusy, setAssessBusy] = useState(false);
   const [assessError, setAssessError] = useState<string | null>(null);
   const [result, setResult] = useState<AssessResponse | null>(null);
+  const [maneuver, setManeuver] = useState<ManeuverPlan | null>(null);
+  const [maneuverBusy, setManeuverBusy] = useState(false);
+  const [maneuverError, setManeuverError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [catalogMeta, setCatalogMeta] = useState<{ count: number; skipped: number } | null>(null);
 
@@ -109,6 +114,21 @@ export default function App() {
     }
   }, [traffic, primaryId, secondaryId]);
 
+  const onSimulateManeuver = useCallback(async () => {
+    if (!primaryId || !secondaryId) return;
+
+    setManeuverBusy(true);
+    setManeuverError(null);
+    try {
+      setManeuver(await planManeuver(primaryId, secondaryId));
+    } catch (err) {
+      setManeuver(null);
+      setManeuverError(err instanceof Error ? err.message : "Maneuver planning failed");
+    } finally {
+      setManeuverBusy(false);
+    }
+  }, [primaryId, secondaryId]);
+
   const onDeselect = useCallback(() => {
     setSelectedId(null);
     setSelectedTrack([]);
@@ -116,6 +136,8 @@ export default function App() {
     setSecondaryId(null);
     setResult(null);
     setAssessError(null);
+    setManeuver(null);
+    setManeuverError(null);
     setLoadError(null);
   }, []);
 
@@ -127,6 +149,7 @@ export default function App() {
           selectedId={selectedId}
           selectedTrack={selectedTrack}
           result={result}
+          maneuver={maneuver}
           onSelect={onSelect}
         />
       </div>
@@ -159,10 +182,14 @@ export default function App() {
         onSetPrimary={setPrimaryId}
         onSetSecondary={setSecondaryId}
         onAssessPair={onAssessPair}
+        onSimulateManeuver={onSimulateManeuver}
         onDeselect={onDeselect}
         assessBusy={assessBusy}
         assessError={assessError}
         result={result}
+        maneuver={maneuver}
+        maneuverBusy={maneuverBusy}
+        maneuverError={maneuverError}
       />
     </div>
   );

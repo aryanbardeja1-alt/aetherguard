@@ -41,15 +41,28 @@ _MESH_NEIGHBORS: dict[str, list[str]] = {
 
 
 def _marker_from_position(
-    name: str, position_km: np.ndarray, epoch: datetime
+    name: str,
+    position_km: np.ndarray,
+    epoch: datetime,
+    *,
+    gmst: float | None = None,
 ) -> GeoMarker:
+    """Build a globe marker from a TEME position.
+
+    Pass ``gmst`` to emit frozen-ECEF coordinates, which is what the globe's
+    orbit paths expect — without it an inertial orbit collapses into a
+    ground-track smear.
+    """
     lat, lon, alt = teme_to_latlon_alt(position_km, epoch)
+    cartesian = (
+        teme_to_ecef(position_km, epoch, gmst=gmst) if gmst is not None else position_km
+    )
     return GeoMarker(
         name=name,
         lat_deg=lat,
         lon_deg=lon,
         alt_km=alt,
-        position_km=[float(x) for x in position_km],
+        position_km=[float(x) for x in cartesian],
     )
 
 
@@ -367,6 +380,10 @@ def plan_maneuver(payload: ManeuverPlanRequest) -> ManeuverPlanResponse:
             event, plan.delta_v, step_seconds=payload.step_seconds
         )
         post_burn_position = optimizer.position_at_tca(event, plan.delta_v)
+
+        # Freeze Earth rotation at the burn epoch, matching sky-traffic tracks,
+        # so these render in the same frame as every other orbit on the globe.
+        gmst0 = gmst_radians(plan.burn_time.replace(tzinfo=timezone.utc))
     except ManeuverConstraintError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PropagationError as exc:
@@ -395,10 +412,12 @@ def plan_maneuver(payload: ManeuverPlanRequest) -> ManeuverPlanResponse:
         risk_before=RiskLevel(classify_risk(before.poc)),
         requires_mesh_rerouting=plan.requires_mesh_rerouting,
         baseline_track=[
-            _marker_from_position(primary_entry["name"], p, t) for t, p in baseline
+            _marker_from_position(primary_entry["name"], p, t, gmst=gmst0)
+            for t, p in baseline
         ],
         maneuvered_track=[
-            _marker_from_position(primary_entry["name"], p, t) for t, p in maneuvered
+            _marker_from_position(primary_entry["name"], p, t, gmst=gmst0)
+            for t, p in maneuvered
         ],
     )
 

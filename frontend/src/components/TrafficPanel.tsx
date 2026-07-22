@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { AssessResponse, SkyTrafficSat } from "../api";
+import type { AssessResponse, ManeuverPlan, SkyTrafficSat } from "../api";
 
 type TrafficPanelProps = {
   traffic: SkyTrafficSat[];
@@ -11,10 +11,14 @@ type TrafficPanelProps = {
   onSetPrimary: (id: string) => void;
   onSetSecondary: (id: string) => void;
   onAssessPair: () => void;
+  onSimulateManeuver: () => void;
   onDeselect: () => void;
   assessBusy: boolean;
   assessError: string | null;
   result: AssessResponse | null;
+  maneuver: ManeuverPlan | null;
+  maneuverBusy: boolean;
+  maneuverError: string | null;
 };
 
 export default function TrafficPanel({
@@ -27,10 +31,14 @@ export default function TrafficPanel({
   onSetPrimary,
   onSetSecondary,
   onAssessPair,
+  onSimulateManeuver,
   onDeselect,
   assessBusy,
   assessError,
   result,
+  maneuver,
+  maneuverBusy,
+  maneuverError,
 }: TrafficPanelProps) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "station" | "visual" | "active">("all");
@@ -172,14 +180,23 @@ export default function TrafficPanel({
           </button>
           <button
             type="button"
+            className="btn primary"
+            disabled={!primaryId || !secondaryId || maneuverBusy}
+            onClick={onSimulateManeuver}
+          >
+            {maneuverBusy ? "Planning…" : "Simulate maneuver"}
+          </button>
+          <button
+            type="button"
             className="btn ghost"
-            disabled={!canDeselect || assessBusy}
+            disabled={!canDeselect || assessBusy || maneuverBusy}
             onClick={onDeselect}
           >
             Clear pair
           </button>
         </div>
         {assessError && <p className="dock-error">{assessError}</p>}
+        {maneuverError && <p className="dock-error">{maneuverError}</p>}
         {result && (
           <div className={`result risk-${result.risk_level.toLowerCase()}`}>
             <div className="result-risk">{result.risk_level}</div>
@@ -193,6 +210,52 @@ export default function TrafficPanel({
                 <dd>{result.dca_km.toFixed(3)} km</dd>
               </div>
             </dl>
+          </div>
+        )}
+
+        {maneuver && (
+          <div className="maneuver">
+            {maneuver.delta_v_magnitude_m_s > 0 ? (
+              <>
+                <div className="maneuver-head">
+                  <span className="maneuver-dv">
+                    Δv {maneuver.delta_v_magnitude_m_s.toFixed(3)} m/s
+                  </span>
+                  <span className="maneuver-lead">
+                    T−{maneuver.burn_lead_hours.toFixed(2)} h
+                  </span>
+                </div>
+                <dl>
+                  <div>
+                    <dt>Pc before → after</dt>
+                    <dd>
+                      {maneuver.poc_before.toExponential(2)} →{" "}
+                      {maneuver.poc_after.toExponential(2)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Miss before → after</dt>
+                    <dd>
+                      {maneuver.miss_distance_before_km.toFixed(3)} →{" "}
+                      {maneuver.miss_distance_after_km.toFixed(3)} km
+                    </dd>
+                  </div>
+                </dl>
+                <p className="maneuver-legend">
+                  <span className="swatch baseline" /> no burn
+                  <span className="swatch burned" /> after burn
+                </p>
+                {maneuver.requires_mesh_rerouting && (
+                  <p className="maneuver-mesh">Mesh rerouting required</p>
+                )}
+              </>
+            ) : (
+              <p className="maneuver-clear">
+                No burn required — {maneuver.primary_name} clears{" "}
+                {maneuver.secondary_name} by{" "}
+                {maneuver.miss_distance_before_km.toFixed(0)} km.
+              </p>
+            )}
           </div>
         )}
       </div>

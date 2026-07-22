@@ -557,3 +557,104 @@ body {
     max-height: 40vh;
   }
 }
+
+/* --- Maneuver simulation ---------------------------------------------- */
+
+.maneuver {
+  margin-top: 0.55rem;
+  padding: 0.7rem 0.75rem;
+  border-left: 3px solid var(--mist);
+  background: rgba(7, 11, 16, 0.55);
+}
+
+.maneuver-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.maneuver-dv {
+  font-family: var(--brand);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--mist);
+}
+
+.maneuver-lead {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--fog);
+}
+
+.maneuver dl {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.5rem 0 0;
+}
+
+.maneuver dt {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fog);
+}
+
+.maneuver dd {
+  margin: 0.1rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.maneuver-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.6rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fog);
+}
+
+.maneuver-legend .swatch {
+  width: 0.85rem;
+  height: 0;
+  margin-left: 0.5rem;
+  border-top-width: 2px;
+}
+
+.maneuver-legend .swatch:first-child {
+  margin-left: 0;
+}
+
+.maneuver-legend .swatch.baseline {
+  border-top: 2px dashed var(--alert);
+}
+
+.maneuver-legend .swatch.burned {
+  border-top: 2px solid var(--mist);
+}
+
+.maneuver-mesh {
+  margin: 0.5rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--warn);
+}
+
+.maneuver-clear {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--fog);
+}
+
+.sat-tag.burn {
+  color: #f0d98c;
+  border-color: rgba(240, 217, 140, 0.55);
+}
