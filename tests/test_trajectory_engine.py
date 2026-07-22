@@ -8,7 +8,9 @@ import numpy as np
 import pytest
 
 from aether_core import ConjunctionEvent, ManeuverPlan
+from engine.propagator import propagate_tle
 from engine.trajectory import (
+    MAX_BURN_LEAD_HOURS,
     MESH_SAFE_SEPARATION_KM,
     SAFE_PROBABILITY,
     ManeuverConstraintError,
@@ -58,14 +60,15 @@ class TestCollisionProbability:
         far = _collision_probability(np.array([5.0, 0.0, 0.0]), relative_velocity, *args)
         assert far < close
 
-    def test_zero_relative_velocity_is_rejected(self) -> None:
-        with pytest.raises(ValueError, match="encounter plane is undefined"):
-            _collision_probability(
-                np.array([1.0, 0.0, 0.0]),
-                np.zeros(3),
-                np.diag([0.09, 0.09, 0.09]),
-                0.02,
-            )
+    def test_zero_relative_velocity_falls_back(self) -> None:
+        """Co-orbital encounters have no relative velocity, but must still evaluate."""
+        probability = _collision_probability(
+            np.array([1.0, 0.0, 0.0]),
+            np.zeros(3),
+            np.diag([0.09, 0.09, 0.09]),
+            0.02,
+        )
+        assert 0.0 <= probability <= 1.0
 
 
 class TestLineOfSight:
@@ -189,3 +192,81 @@ class TestConstellationAvoidance:
 
     def test_separation_floor_is_ten_kilometres(self) -> None:
         assert MESH_SAFE_SEPARATION_KM == 10.0
+
+
+# --- Large Earth orbits -------------------------------------------------------
+# Real catalog TLEs. The engine's original "half an orbit before TCA" rule was
+# written against a 97-minute circular LEO; these are the regimes that broke it.
+
+GEO_TLE = (  # ABS-6: period 23.9 h, so half a period sits just under the cap.
+    "1 25924U 99053A   26202.57649515 -.00000118  00000+0  00000+0 0  9991",
+    "2 25924   0.0738 264.5685 0003296 196.1294 205.1942  1.00270352 98189",
+)
+HEO_TLE = (  # Chandra: e=0.78, apogee 137,000 km, period 63.5 h.
+    "1 25867U 99040B   26203.75757577  .00000588  00000+0  00000+0 0  9992",
+    "2 25867  56.6521 115.7083 7776511 309.9609   0.5640  0.37802015 17458",
+)
+CATALOG_EPOCH = datetime(2026, 7, 22, 12, 0, 0)
+
+
+def state_from_tle(tle: tuple[str, str]) -> np.ndarray:
+    """Propagate a TLE to the reference epoch and return [r, v] in km, km/s."""
+    sv = propagate_tle(tle[0], tle[1], CATALOG_EPOCH)
+    return np.concatenate([sv.position_km, sv.velocity_km_s])
+
+
+def make_close_approach(state: np.ndarray, offset_km: float = 0.05) -> ConjunctionEvent:
+    """Build a head-on conjunction against a real orbital state."""
+    secondary = state.copy()
+    secondary[2] += offset_km
+    secondary[3:] = -secondary[3:]
+    return ConjunctionEvent(
+        event_id="CDM-LARGE",
+        satellite_id="AETHER-LG",
+        sat_state_vector=state,
+        object_state_vector=secondary,
+        tca=CATALOG_EPOCH,
+        probability_of_collision=1e-3,
+        mode="INDEPENDENT",
+        mesh_neighbors=None,
+    )
+
+
+class TestLargeEarthOrbits:
+    def test_geo_lead_time_is_half_a_period(self) -> None:
+        """GEO's half period (~12.0 h) sits right at the cap boundary."""
+        event = make_close_approach(state_from_tle(GEO_TLE))
+        plan = TrajectoryOptimizer().calculate_independent_avoidance(event)
+
+        lead_hours = (CATALOG_EPOCH - plan.burn_time.replace(tzinfo=None)).total_seconds() / 3600.0
+        assert 11.5 < lead_hours <= MAX_BURN_LEAD_HOURS
+
+    def test_heo_lead_time_is_capped(self) -> None:
+        """Chandra's half period is 31.7 h; without the cap the burn is unusable."""
+        event = make_close_approach(state_from_tle(HEO_TLE))
+        plan = TrajectoryOptimizer().calculate_independent_avoidance(event)
+
+        lead_hours = (CATALOG_EPOCH - plan.burn_time.replace(tzinfo=None)).total_seconds() / 3600.0
+        assert lead_hours == pytest.approx(MAX_BURN_LEAD_HOURS, abs=1e-6)
+
+    def test_heo_conjunction_still_reaches_threshold(self) -> None:
+        event = make_close_approach(state_from_tle(HEO_TLE))
+        plan = TrajectoryOptimizer().calculate_independent_avoidance(event)
+
+        assert plan.new_probability < SAFE_PROBABILITY
+        assert 0.0 < np.linalg.norm(plan.delta_v) <= TrajectoryOptimizer().max_delta_v_mps
+
+    def test_cap_is_configurable(self) -> None:
+        event = make_close_approach(state_from_tle(HEO_TLE))
+        plan = TrajectoryOptimizer(max_burn_lead_hours=2.0).calculate_independent_avoidance(event)
+
+        lead_hours = (CATALOG_EPOCH - plan.burn_time.replace(tzinfo=None)).total_seconds() / 3600.0
+        assert lead_hours == pytest.approx(2.0, abs=1e-6)
+
+    def test_open_orbit_is_rejected(self) -> None:
+        """A hyperbolic state has no period, so the half-orbit rule cannot apply."""
+        escape = np.array([7000.0, 0.0, 0.0, 0.0, 12.0, 0.0])  # > escape velocity
+        event = make_close_approach(escape)
+
+        with pytest.raises(ManeuverConstraintError, match="not closed"):
+            TrajectoryOptimizer().calculate_independent_avoidance(event)

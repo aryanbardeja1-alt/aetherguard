@@ -2,17 +2,21 @@
 
 Takes a :class:`ConjunctionEvent` and produces a :class:`ManeuverPlan` describing
 the minimum-magnitude impulsive burn that drops the probability of collision
-below the safety threshold, executed half an orbit before TCA.
+below the safety threshold.
 
-Orbit construction and propagation are delegated to ``poliastro``/``astropy``.
-The collision-probability integral (Chan's method) and the line-of-sight
-occultation test are implemented here because neither library provides them.
+The burn is placed half an orbit before TCA, capped at
+:data:`MAX_BURN_LEAD_HOURS`. The cap matters for the large Earth orbits in the
+catalog: a half period is 12 hours at GEO and over 31 hours for Chandra-class
+elliptical orbits, which is not a usable lead time.
+
+Orbit construction and propagation are delegated to ``poliastro``/``astropy``,
+and the collision-probability integral to :mod:`engine.collision`. The
+line-of-sight occultation test lives here because no library provides it.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from math import exp, factorial
 from typing import Final, Mapping, Optional, Tuple
 
 import numpy as np
@@ -23,6 +27,7 @@ from poliastro.twobody import Orbit
 from scipy.optimize import brentq
 
 from aether_core import ConjunctionEvent, ManeuverPlan
+from engine.collision import build_encounter_rotation, chan_poc, project_covariance_2d
 
 #: Collision probability that a maneuver must achieve.
 SAFE_PROBABILITY: Final[float] = 1e-6
@@ -32,6 +37,9 @@ MAX_DELTA_V_MPS: Final[float] = 50.0
 
 #: Minimum separation from a mesh neighbour before rerouting is required, km.
 MESH_SAFE_SEPARATION_KM: Final[float] = 10.0
+
+#: Ceiling on how far before TCA a burn may be scheduled, hours.
+MAX_BURN_LEAD_HOURS: Final[float] = 12.0
 
 _EARTH_RADIUS_KM: Final[float] = float(Earth.R.to(u.km).value)
 
@@ -46,54 +54,16 @@ def _collision_probability(
     covariance_km2: np.ndarray,
     hard_body_radius_km: float,
 ) -> float:
-    """Probability of collision via Chan's series over the B-plane.
+    """Probability of collision over the B-plane, via :mod:`engine.collision`.
 
-    The combined position uncertainty and the miss vector are projected onto the
-    encounter plane (normal to the relative velocity), then the 2-D Gaussian is
-    integrated over a disk of radius ``hard_body_radius_km``.
+    ``covariance_km2`` is the *combined* uncertainty of both objects, so it is
+    projected against a zero second covariance. Delegating keeps a single Chan
+    implementation in the codebase and inherits its conditioning checks.
     """
-    speed = float(np.linalg.norm(rel_velocity_km_s))
-    if speed == 0.0:
-        raise ValueError("Relative velocity is zero; the encounter plane is undefined.")
-
-    normal = rel_velocity_km_s / speed
-
-    # Orthonormal basis spanning the encounter plane.
-    in_plane = rel_position_km - np.dot(rel_position_km, normal) * normal
-    if np.linalg.norm(in_plane) < 1e-12:
-        seed = np.array([1.0, 0.0, 0.0])
-        if abs(normal[0]) > 0.9:
-            seed = np.array([0.0, 1.0, 0.0])
-        in_plane = seed - np.dot(seed, normal) * normal
-    axis_1 = in_plane / np.linalg.norm(in_plane)
-    axis_2 = np.cross(normal, axis_1)
-
-    basis = np.column_stack((axis_1, axis_2))
-    miss_2d = basis.T @ rel_position_km
-    cov_2d = basis.T @ covariance_km2 @ basis
-
-    # Principal axes of the projected covariance.
-    variances, rotation = np.linalg.eigh(cov_2d)
-    variances = np.clip(variances, 1e-18, None)
-    miss_principal = rotation.T @ miss_2d
-
-    sigma_x, sigma_y = np.sqrt(variances)
-    scaled_area = hard_body_radius_km**2 / (sigma_x * sigma_y)
-    scaled_miss = float(
-        miss_principal[0] ** 2 / variances[0] + miss_principal[1] ** 2 / variances[1]
-    )
-
-    total = 0.0
-    for m in range(50):
-        inner = 1.0 - exp(-scaled_area / 2.0) * sum(
-            (scaled_area / 2.0) ** k / factorial(k) for k in range(m + 1)
-        )
-        term = ((scaled_miss / 2.0) ** m / factorial(m)) * inner
-        total += term
-        if m > 5 and term < 1e-18:
-            break
-
-    return float(np.clip(exp(-scaled_miss / 2.0) * total, 0.0, 1.0))
+    rotation = build_encounter_rotation(rel_velocity_km_s, fallback_axis=rel_position_km)
+    c2d = project_covariance_2d(covariance_km2, np.zeros((3, 3)), rotation)
+    miss = rotation @ np.asarray(rel_position_km, dtype=float).reshape(3)
+    return chan_poc(miss, c2d, hard_body_radius_km)
 
 
 def _line_of_sight_blocked(position_a_km: np.ndarray, position_b_km: np.ndarray) -> bool:
@@ -124,6 +94,10 @@ class TrajectoryOptimizer:
         neighbor_states: Maps mesh neighbour ID to its ECI state vector at TCA,
             ``[x, y, z, vx, vy, vz]`` in km and km/s.
         max_delta_v_mps: Propulsion limit for a single impulsive burn.
+        max_burn_lead_hours: Ceiling on how far before TCA the burn may sit.
+            Below this the burn stays at half a period; above it the burn is
+            pulled in, which is what keeps GEO and highly elliptical orbits
+            practical.
     """
 
     def __init__(
@@ -132,6 +106,7 @@ class TrajectoryOptimizer:
         hard_body_radius_km: float = 0.02,
         neighbor_states: Optional[Mapping[str, np.ndarray]] = None,
         max_delta_v_mps: float = MAX_DELTA_V_MPS,
+        max_burn_lead_hours: float = MAX_BURN_LEAD_HOURS,
     ) -> None:
         self.position_covariance_km2: np.ndarray = (
             np.diag([0.09, 0.09, 0.09])
@@ -141,6 +116,7 @@ class TrajectoryOptimizer:
         self.hard_body_radius_km: float = hard_body_radius_km
         self.neighbor_states: Mapping[str, np.ndarray] = neighbor_states or {}
         self.max_delta_v_mps: float = max_delta_v_mps
+        self.max_burn_lead_hours: float = max_burn_lead_hours
 
     def calculate_independent_avoidance(self, event: ConjunctionEvent) -> ManeuverPlan:
         """Plan a burn for a satellite operating with no mesh obligations."""
@@ -207,28 +183,45 @@ class TrajectoryOptimizer:
     def _burn_state(
         self, event: ConjunctionEvent
     ) -> Tuple[np.ndarray, np.ndarray, datetime, float]:
-        """Back-propagate the satellite half an orbit to locate the burn point."""
+        """Back-propagate to the burn point: half an orbit before TCA, capped.
+
+        Raises:
+            ManeuverConstraintError: If the orbit is not closed, since an open
+                trajectory has no period to take half of.
+        """
         state = np.asarray(event.sat_state_vector, dtype=float)
         tca = Time(event.tca, scale="utc")
 
         orbit_at_tca = Orbit.from_vectors(
             Earth, state[:3] * u.km, state[3:] * u.km / u.s, epoch=tca
         )
-        half_period = orbit_at_tca.period / 2.0
-        orbit_at_burn = orbit_at_tca.propagate(-half_period)
+
+        eccentricity = float(orbit_at_tca.ecc.value)
+        if eccentricity >= 1.0:
+            raise ManeuverConstraintError(
+                f"Event {event.event_id}: orbit is not closed (e={eccentricity:.4f}), "
+                "so it has no period and no half-orbit burn point."
+            )
+
+        lead_seconds = min(
+            float((orbit_at_tca.period / 2.0).to(u.s).value),
+            self.max_burn_lead_hours * 3600.0,
+        )
+        lead = lead_seconds * u.s
+        orbit_at_burn = orbit_at_tca.propagate(-lead)
 
         return (
             np.asarray(orbit_at_burn.r.to(u.km).value, dtype=float),
             np.asarray(orbit_at_burn.v.to(u.km / u.s).value, dtype=float),
-            (tca - half_period).to_datetime(),
-            float(half_period.to(u.s).value),
+            (tca - lead).to_datetime(),
+            lead_seconds,
         )
 
     def _position_at_tca(
         self, event: ConjunctionEvent, delta_v_mps: np.ndarray
     ) -> np.ndarray:
         """Satellite position at TCA after applying ``delta_v_mps`` at the burn point."""
-        position, velocity, burn_time, half_period_s = self._burn_state(event)
+        position, velocity, burn_time, lead_seconds = self._burn_state(event)
         boosted = velocity + np.asarray(delta_v_mps, dtype=float) / 1000.0
 
         orbit = Orbit.from_vectors(
@@ -238,7 +231,7 @@ class TrajectoryOptimizer:
             epoch=Time(burn_time, scale="utc"),
         )
         return np.asarray(
-            orbit.propagate(half_period_s * u.s).r.to(u.km).value, dtype=float
+            orbit.propagate(lead_seconds * u.s).r.to(u.km).value, dtype=float
         )
 
     def _solve_avoidance_burn(
@@ -254,7 +247,7 @@ class TrajectoryOptimizer:
             ManeuverConstraintError: If no impulse within the propulsion limit
                 reaches the threshold.
         """
-        position, velocity, burn_time, half_period_s = self._burn_state(event)
+        position, velocity, burn_time, lead_seconds = self._burn_state(event)
         along_track = velocity / float(np.linalg.norm(velocity))
         object_state = np.asarray(event.object_state_vector, dtype=float)
         burn_epoch = Time(burn_time, scale="utc")
@@ -264,7 +257,7 @@ class TrajectoryOptimizer:
             orbit = Orbit.from_vectors(
                 Earth, position * u.km, boosted * u.km / u.s, epoch=burn_epoch
             )
-            at_tca = orbit.propagate(half_period_s * u.s)
+            at_tca = orbit.propagate(lead_seconds * u.s)
             return _collision_probability(
                 np.asarray(at_tca.r.to(u.km).value, dtype=float) - object_state[:3],
                 np.asarray(at_tca.v.to(u.km / u.s).value, dtype=float)

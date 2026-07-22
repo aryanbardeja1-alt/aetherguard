@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
 import numpy as np
 from scipy.integrate import dblquad
@@ -12,6 +12,21 @@ from scipy.linalg import inv
 from engine.frames import FrameError, rotate_covariance_rtn_to_teme
 
 CovarianceFrame = Literal["TEME", "RTN"]
+
+#: Physical floor on the projected 1-sigma, km. Tracked-object covariances are
+#: never tighter than a metre, so anything below this is bad input rather than
+#: precise knowledge. Flooring it instead would report near-certainty from a
+#: degenerate matrix.
+MIN_SIGMA_KM: Final[float] = 1e-3
+
+#: Plausible band for a combined hard-body radius, km (0.1 m to 100 m). Catches
+#: the metre/kilometre slip that otherwise silently saturates PoC to 1.
+MIN_HBR_KM: Final[float] = 1e-4
+MAX_HBR_KM: Final[float] = 0.1
+
+#: Above this Chan parameter every bracket term is 1 to machine precision and
+#: the series collapses to exactly 1. Short-circuit before (u/2)**k overflows.
+MAX_CHAN_U: Final[float] = 1e3
 
 
 class CovarianceError(Exception):
@@ -91,6 +106,27 @@ def project_covariance_2d(
     return rotation @ combined @ rotation.T
 
 
+def _validate_hbr(hbr_km: float) -> float:
+    """Reject hard-body radii outside the physical band.
+
+    An oversized radius (typically metres passed where kilometres were meant)
+    drives the hard-body disk over the bulk of the distribution and saturates
+    PoC to 1, so it must fail loudly rather than return a plausible-looking
+    certainty.
+    """
+    value = float(hbr_km)
+    if not np.isfinite(value):
+        raise CovarianceError(f"Hard-body radius is not finite (got {value}).")
+    if not (MIN_HBR_KM <= value <= MAX_HBR_KM):
+        raise CovarianceError(
+            f"Hard-body radius {value:g} km is outside the physical band "
+            f"[{MIN_HBR_KM:g}, {MAX_HBR_KM:g}] km "
+            f"({MIN_HBR_KM * 1000:g}–{MAX_HBR_KM * 1000:g} m). "
+            "Check whether metres were passed where kilometres were expected."
+        )
+    return value
+
+
 def _validate_c2d(c2d_km2: np.ndarray) -> tuple[float, np.ndarray]:
     """Return (det, inv(C)) after positive-definite / conditioning checks."""
     det = float(np.linalg.det(c2d_km2))
@@ -104,6 +140,16 @@ def _validate_c2d(c2d_km2: np.ndarray) -> tuple[float, np.ndarray]:
     if cond > 1e12:
         raise CovarianceError(
             f"Projected 2-D covariance is ill-conditioned (cond={cond:.2e})."
+        )
+
+    # Positive-definiteness alone is not enough: a positive but vanishingly
+    # small covariance still saturates PoC. Reject on the physical floor.
+    smallest_sigma = float(np.sqrt(np.linalg.eigvalsh(c2d_km2).min()))
+    if smallest_sigma < MIN_SIGMA_KM:
+        raise CovarianceError(
+            f"Projected 1-sigma {smallest_sigma * 1000:.3e} m is below the "
+            f"{MIN_SIGMA_KM * 1000:g} m physical floor; the covariance is "
+            "degenerate or expressed in the wrong units."
         )
 
     try:
@@ -134,9 +180,7 @@ def integrate_poc_disk(
 
     Retained for cross-checks against Chan's analytical series.
     """
-    if hbr_km <= 0.0:
-        return 0.0
-
+    hbr_km = _validate_hbr(hbr_km)
     det, inv_c = _validate_c2d(c2d_km2)
     norm_const = 1.0 / (2.0 * np.pi * np.sqrt(det))
     mean = np.asarray(miss_km, dtype=np.float64).reshape(2)
@@ -187,9 +231,7 @@ def chan_poc(
     Converges in a handful of terms for typical conjunction geometries and is
     orders of magnitude faster than ``dblquad``.
     """
-    if hbr_km <= 0.0:
-        return 0.0
-
+    hbr_km = _validate_hbr(hbr_km)
     _validate_c2d(c2d_km2)
 
     eigvals, eigvecs = np.linalg.eigh(c2d_km2)
@@ -205,6 +247,12 @@ def chan_poc(
     # Degenerate / extreme guards.
     if not np.isfinite(u) or not np.isfinite(v):
         raise CovarianceError("Chan parameters u, v are non-finite.")
+
+    if u > MAX_CHAN_U:
+        # exp(-u/2)·Σ(u/2)^k/k! underflows to 0, so every bracket term is 1 and
+        # the series telescopes: e^{-v/2}·Σ(v/2)^m/m! = e^{-v/2}·e^{v/2} = 1.
+        # Returning here avoids (u/2)**k overflowing to inf and then NaN.
+        return 1.0
 
     exp_neg_half_v = float(np.exp(-0.5 * v))
     exp_neg_half_u = float(np.exp(-0.5 * u))
