@@ -109,6 +109,16 @@ export default function App() {
     }
   }, [traffic, primaryId, secondaryId]);
 
+  const onDeselect = useCallback(() => {
+    setSelectedId(null);
+    setSelectedTrack([]);
+    setPrimaryId(null);
+    setSecondaryId(null);
+    setResult(null);
+    setAssessError(null);
+    setLoadError(null);
+  }, []);
+
   return (
     <div className="app">
       <div className="globe-layer">
@@ -149,6 +159,7 @@ export default function App() {
         onSetPrimary={setPrimaryId}
         onSetSecondary={setSecondaryId}
         onAssessPair={onAssessPair}
+        onDeselect={onDeselect}
         assessBusy={assessBusy}
         assessError={assessError}
         result={result}

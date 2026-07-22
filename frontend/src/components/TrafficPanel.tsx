@@ -11,6 +11,7 @@ type TrafficPanelProps = {
   onSetPrimary: (id: string) => void;
   onSetSecondary: (id: string) => void;
   onAssessPair: () => void;
+  onDeselect: () => void;
   assessBusy: boolean;
   assessError: string | null;
   result: AssessResponse | null;
@@ -26,6 +27,7 @@ export default function TrafficPanel({
   onSetPrimary,
   onSetSecondary,
   onAssessPair,
+  onDeselect,
   assessBusy,
   assessError,
   result,
@@ -48,6 +50,7 @@ export default function TrafficPanel({
   }, [traffic, query, filter]);
 
   const selected = traffic.find((s) => s.id === selectedId) ?? null;
+  const canDeselect = Boolean(selectedId || primaryId || secondaryId || result);
 
   return (
     <aside className="traffic">
@@ -145,6 +148,9 @@ export default function TrafficPanel({
             <button type="button" className="btn ghost" onClick={() => onSetSecondary(selected.id)}>
               Set secondary
             </button>
+            <button type="button" className="btn ghost" onClick={() => onSelect("")}>
+              Deselect
+            </button>
           </div>
         </div>
       )}
@@ -155,14 +161,24 @@ export default function TrafficPanel({
           {" × "}
           <strong>{secondaryId ? traffic.find((s) => s.id === secondaryId)?.name ?? "—" : "—"}</strong>
         </p>
-        <button
-          type="button"
-          className="btn primary"
-          disabled={!primaryId || !secondaryId || assessBusy}
-          onClick={onAssessPair}
-        >
-          {assessBusy ? "Assessing…" : "Assess pair"}
-        </button>
+        <div className="assess-actions">
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!primaryId || !secondaryId || assessBusy}
+            onClick={onAssessPair}
+          >
+            {assessBusy ? "Assessing…" : "Assess pair"}
+          </button>
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={!canDeselect || assessBusy}
+            onClick={onDeselect}
+          >
+            Clear pair
+          </button>
+        </div>
         {assessError && <p className="dock-error">{assessError}</p>}
         {result && (
           <div className={`result risk-${result.risk_level.toLowerCase()}`}>
