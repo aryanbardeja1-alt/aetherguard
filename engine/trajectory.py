@@ -16,8 +16,8 @@ line-of-sight occultation test lives here because no library provides it.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Final, Mapping, Optional, Tuple
+from datetime import datetime, timedelta
+from typing import Final, List, Mapping, Optional, Tuple
 
 import numpy as np
 from astropy import units as u
@@ -79,6 +79,35 @@ def _line_of_sight_blocked(position_a_km: np.ndarray, position_b_km: np.ndarray)
     return bool(np.linalg.norm(closest) < _EARTH_RADIUS_KM)
 
 
+def _sample_trajectory(
+    position_km: np.ndarray,
+    velocity_km_s: np.ndarray,
+    epoch: datetime,
+    duration_seconds: float,
+    step_seconds: float,
+) -> List[Tuple[datetime, np.ndarray]]:
+    """Sample a two-body trajectory forward from a state, for visualisation."""
+    orbit = Orbit.from_vectors(
+        Earth,
+        np.asarray(position_km, dtype=float) * u.km,
+        np.asarray(velocity_km_s, dtype=float) * u.km / u.s,
+        epoch=Time(epoch, scale="utc"),
+    )
+
+    steps = int(np.clip(duration_seconds / step_seconds, 2, 600)) + 1
+    samples: List[Tuple[datetime, np.ndarray]] = []
+    for index in range(steps):
+        offset = index * (duration_seconds / (steps - 1))
+        propagated = orbit.propagate(offset * u.s)
+        samples.append(
+            (
+                epoch + timedelta(seconds=offset),
+                np.asarray(propagated.r.to(u.km).value, dtype=float),
+            )
+        )
+    return samples
+
+
 class TrajectoryOptimizer:
     """Plans impulsive avoidance burns for a single spacecraft.
 
@@ -138,7 +167,7 @@ class TrajectoryOptimizer:
         clear line of sight before the burn becomes occulted by the Earth.
         """
         delta_v_mps, probability, burn_time = self._solve_avoidance_burn(event)
-        post_burn_position = self._position_at_tca(event, delta_v_mps)
+        post_burn_position = self.position_at_tca(event, delta_v_mps)
 
         return ManeuverPlan(
             event_id=event.event_id,
@@ -148,6 +177,32 @@ class TrajectoryOptimizer:
             new_probability=probability,
             requires_mesh_rerouting=self._mesh_is_disrupted(event, post_burn_position),
         )
+
+    def burn_comparison_tracks(
+        self,
+        event: ConjunctionEvent,
+        delta_v_mps: np.ndarray,
+        *,
+        duration_seconds: Optional[float] = None,
+        step_seconds: float = 120.0,
+    ) -> Tuple[List[Tuple[datetime, np.ndarray]], List[Tuple[datetime, np.ndarray]]]:
+        """Return (baseline, post-burn) tracks starting at the burn point.
+
+        Both are sampled with the same two-body propagator so the only
+        difference between them is the impulse. Sampling the baseline with SGP4
+        and the maneuvered path with poliastro would show a divergence that has
+        nothing to do with the burn.
+
+        Defaults to spanning burn → TCA → as far again beyond, so the crossing
+        geometry is visible on either side.
+        """
+        position, velocity, burn_time, lead_seconds = self._burn_state(event)
+        span = duration_seconds if duration_seconds is not None else lead_seconds * 2.0
+
+        baseline = _sample_trajectory(position, velocity, burn_time, span, step_seconds)
+        boosted = velocity + np.asarray(delta_v_mps, dtype=float) / 1000.0
+        maneuvered = _sample_trajectory(position, boosted, burn_time, span, step_seconds)
+        return baseline, maneuvered
 
     def _mesh_is_disrupted(
         self, event: ConjunctionEvent, post_burn_position_km: np.ndarray
@@ -217,7 +272,7 @@ class TrajectoryOptimizer:
             lead_seconds,
         )
 
-    def _position_at_tca(
+    def position_at_tca(
         self, event: ConjunctionEvent, delta_v_mps: np.ndarray
     ) -> np.ndarray:
         """Satellite position at TCA after applying ``delta_v_mps`` at the burn point."""
@@ -268,6 +323,12 @@ class TrajectoryOptimizer:
 
         def margin(magnitude_mps: float) -> float:
             return probability_at(magnitude_mps) - SAFE_PROBABILITY
+
+        # Most catalog pairs are nowhere near each other. If the encounter is
+        # already below threshold, the cheapest compliant burn is no burn.
+        baseline = probability_at(0.0)
+        if baseline < SAFE_PROBABILITY:
+            return np.zeros(3), baseline, burn_time
 
         # Walk outwards from zero; the first magnitude that clears the threshold
         # in either direction is the minimum, then refine inside that bracket.

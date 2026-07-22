@@ -164,6 +164,45 @@ class SkyTrafficResponse(BaseModel):
     satellites: list[SkyTrafficObject]
 
 
+class ManeuverPlanRequest(BaseModel):
+    """Payload for ``POST /api/v1/plan-maneuver``.
+
+    Both objects are named by catalog id, matching the pair the operator picks
+    on the globe. The primary is the one that maneuvers.
+    """
+
+    primary_id: Annotated[str, Field(min_length=1, description="Catalog id that burns")]
+    secondary_id: Annotated[str, Field(min_length=1, description="Catalog id to avoid")]
+    target_time: datetime | None = Field(
+        default=None, description="Time of closest approach (UTC). Defaults to now."
+    )
+    hbr_meters: Annotated[float, Field(gt=0)] = 20.0
+    P1_diag: Diag3 | None = None
+    P2_diag: Diag3 | None = None
+    max_delta_v_mps: Annotated[float, Field(gt=0, le=1000)] = 50.0
+    max_burn_lead_hours: Annotated[float, Field(gt=0, le=48)] = 12.0
+    step_seconds: Annotated[float, Field(gt=0, le=3600)] = 120.0
+
+
+class ManeuverPlanResponse(BaseModel):
+    """Avoidance burn plus the trajectories it produces, for the globe."""
+
+    primary_name: str
+    secondary_name: str
+    delta_v_m_s: list[float] = Field(description="Burn vector [dvx, dvy, dvz] (m/s)")
+    delta_v_magnitude_m_s: float
+    burn_time: datetime
+    burn_lead_hours: float = Field(description="How far before TCA the burn sits")
+    poc_before: float
+    poc_after: float
+    miss_distance_before_km: float
+    miss_distance_after_km: float
+    risk_before: RiskLevel
+    requires_mesh_rerouting: bool
+    baseline_track: list[GeoMarker] = Field(description="Trajectory with no burn")
+    maneuvered_track: list[GeoMarker] = Field(description="Trajectory after the burn")
+
+
 class MeshNodeSyncRequest(BaseModel):
     """Node telemetry ingested by the orbital mesh router."""
 

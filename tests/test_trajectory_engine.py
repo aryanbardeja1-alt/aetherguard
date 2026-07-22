@@ -148,7 +148,7 @@ class TestConstellationAvoidance:
     def test_close_neighbour_triggers_rerouting(self) -> None:
         event = make_event(mode="CONSTELLATION", neighbors=["AETHER-06"])
         reference = TrajectoryOptimizer().calculate_independent_avoidance(event)
-        post_burn = TrajectoryOptimizer()._position_at_tca(event, reference.delta_v)
+        post_burn = TrajectoryOptimizer().position_at_tca(event, reference.delta_v)
 
         # Park the neighbour just inside the separation floor.
         neighbour = np.concatenate([post_burn + np.array([0.0, 0.0, 1.0]), np.zeros(3)])

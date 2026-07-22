@@ -400,3 +400,115 @@ def test_sky_traffic_track_covers_full_geo_orbit() -> None:
     ys = [p["position_km"][1] for p in points]
     assert max(xs) - min(xs) > 20000
     assert max(ys) - min(ys) > 20000
+# --- POST /api/v1/plan-maneuver ----------------------------------------------
+
+CO_LOCATED_PRIMARY = "25544"  # ISS (ZARYA)
+CO_LOCATED_SECONDARY = "25575"  # ISS (UNITY) — shares the station's orbit
+
+
+def _distant_geo_pair() -> tuple[str, str]:
+    """Two GEO objects far enough apart that no burn is warranted."""
+    sats = client.get("/api/v1/sky-traffic").json()["satellites"]
+    geo = [s for s in sats if 35_000 < s["alt_km"] < 37_000]
+    return geo[0]["id"], geo[1]["id"]
+
+
+class TestPlanManeuver:
+    def test_co_located_pair_gets_a_burn_that_clears_threshold(self) -> None:
+        response = client.post(
+            "/api/v1/plan-maneuver",
+            json={
+                "primary_id": CO_LOCATED_PRIMARY,
+                "secondary_id": CO_LOCATED_SECONDARY,
+                "hbr_meters": 20.0,
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+
+        assert body["poc_before"] > body["poc_after"]
+        assert body["poc_after"] < 1e-6
+        assert body["delta_v_magnitude_m_s"] > 0.0
+        assert len(body["delta_v_m_s"]) == 3
+        assert body["miss_distance_after_km"] > body["miss_distance_before_km"]
+
+    def test_distant_pair_needs_no_burn(self) -> None:
+        """A safe encounter's cheapest compliant maneuver is no maneuver."""
+        primary, secondary = _distant_geo_pair()
+        response = client.post(
+            "/api/v1/plan-maneuver",
+            json={"primary_id": primary, "secondary_id": secondary},
+        )
+        assert response.status_code == 200
+        body = response.json()
+
+        assert body["delta_v_magnitude_m_s"] == pytest.approx(0.0)
+        assert body["risk_before"] == "LOW"
+
+    def test_tracks_share_a_start_and_then_diverge(self) -> None:
+        response = client.post(
+            "/api/v1/plan-maneuver",
+            json={
+                "primary_id": CO_LOCATED_PRIMARY,
+                "secondary_id": CO_LOCATED_SECONDARY,
+            },
+        )
+        body = response.json()
+        baseline = body["baseline_track"]
+        maneuvered = body["maneuvered_track"]
+
+        assert len(baseline) == len(maneuvered) > 2
+
+        def separation(index: int) -> float:
+            return float(
+                np.linalg.norm(
+                    np.array(baseline[index]["position_km"])
+                    - np.array(maneuvered[index]["position_km"])
+                )
+            )
+
+        # Both are sampled from the burn point with the same propagator, so any
+        # separation is the burn alone and must grow monotonically from zero.
+        assert separation(0) == pytest.approx(0.0, abs=1e-9)
+        assert separation(len(baseline) // 2) > separation(0)
+        assert separation(-1) > separation(len(baseline) // 2)
+
+    def test_burn_lead_respects_the_cap(self) -> None:
+        primary, secondary = _distant_geo_pair()
+        response = client.post(
+            "/api/v1/plan-maneuver",
+            json={
+                "primary_id": primary,
+                "secondary_id": secondary,
+                "max_burn_lead_hours": 3.0,
+            },
+        )
+        assert response.json()["burn_lead_hours"] == pytest.approx(3.0, abs=1e-3)
+
+    def test_identical_objects_rejected(self) -> None:
+        response = client.post(
+            "/api/v1/plan-maneuver",
+            json={"primary_id": CO_LOCATED_PRIMARY, "secondary_id": CO_LOCATED_PRIMARY},
+        )
+        assert response.status_code == 422
+        assert "different objects" in response.json()["detail"]
+
+    def test_unknown_id_is_404(self) -> None:
+        response = client.post(
+            "/api/v1/plan-maneuver",
+            json={"primary_id": "000000", "secondary_id": CO_LOCATED_SECONDARY},
+        )
+        assert response.status_code == 404
+
+    def test_hard_body_radius_unit_slip_is_rejected(self) -> None:
+        """hbr_meters=10000 means a 10 km object; fail loudly, not with PoC=1."""
+        response = client.post(
+            "/api/v1/plan-maneuver",
+            json={
+                "primary_id": CO_LOCATED_PRIMARY,
+                "secondary_id": CO_LOCATED_SECONDARY,
+                "hbr_meters": 10000.0,
+            },
+        )
+        assert response.status_code == 422
+        assert "physical band" in response.json()["detail"]

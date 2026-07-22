@@ -7,14 +7,18 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
+from aether_core import ConjunctionEvent
 from engine.catalog import get_entry, load_catalog
 from engine.collision import CovarianceError, assess_collision, classify_risk
 from engine.geo import gmst_radians, teme_to_ecef, teme_to_latlon_alt
 from engine.propagator import PropagationError, propagate_tle, relative_state
+from engine.trajectory import ManeuverConstraintError, TrajectoryOptimizer
 from schemas.conjunction import (
     ConjunctionAssessRequest,
     ConjunctionAssessResponse,
     GeoMarker,
+    ManeuverPlanRequest,
+    ManeuverPlanResponse,
     MeshNodeSyncRequest,
     MeshNodeSyncResponse,
     OrbitTrackRequest,
@@ -34,6 +38,19 @@ _MESH_NEIGHBORS: dict[str, list[str]] = {
     "NODE-CHARLIE": ["NODE-BRAVO", "NODE-GATEWAY"],
     "NODE-GATEWAY": ["NODE-ALPHA", "NODE-CHARLIE"],
 }
+
+
+def _marker_from_position(
+    name: str, position_km: np.ndarray, epoch: datetime
+) -> GeoMarker:
+    lat, lon, alt = teme_to_latlon_alt(position_km, epoch)
+    return GeoMarker(
+        name=name,
+        lat_deg=lat,
+        lon_deg=lon,
+        alt_km=alt,
+        position_km=[float(x) for x in position_km],
+    )
 
 
 def _marker_from_state(name: str, state) -> GeoMarker:
@@ -271,6 +288,119 @@ def orbit_track(payload: OrbitTrackRequest) -> OrbitTrackResponse:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return OrbitTrackResponse(name=payload.tle.name, points=points)
+
+
+@router.post("/api/v1/plan-maneuver", response_model=ManeuverPlanResponse)
+def plan_maneuver(payload: ManeuverPlanRequest) -> ManeuverPlanResponse:
+    """Plan an avoidance burn for a selected pair and return both trajectories.
+
+    The primary maneuvers; the secondary is treated as uncooperative. Both
+    returned tracks start at the burn point so the divergence on the globe is
+    the burn and nothing else.
+    """
+    if payload.primary_id == payload.secondary_id:
+        raise HTTPException(
+            status_code=422, detail="Primary and secondary must be different objects."
+        )
+
+    primary_entry = get_entry(payload.primary_id)
+    secondary_entry = get_entry(payload.secondary_id)
+    for label, entry, sat_id in (
+        ("primary", primary_entry, payload.primary_id),
+        ("secondary", secondary_entry, payload.secondary_id),
+    ):
+        if entry is None:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown {label} satellite id '{sat_id}'."
+            )
+
+    tca = payload.target_time or datetime.now(timezone.utc)
+    if tca.tzinfo is None:
+        tca = tca.replace(tzinfo=timezone.utc)
+
+    p1_diag = payload.P1_diag or [0.045, 0.045, 0.045]
+    p2_diag = payload.P2_diag or [0.045, 0.045, 0.045]
+
+    try:
+        primary = propagate_tle(
+            primary_entry["line1"], primary_entry["line2"], tca,
+            name=primary_entry["name"],
+        )
+        secondary = propagate_tle(
+            secondary_entry["line1"], secondary_entry["line2"], tca,
+            name=secondary_entry["name"],
+        )
+        r_rel, v_rel = relative_state(primary, secondary)
+
+        before = assess_collision(
+            r_rel_km=r_rel,
+            v_rel_km_s=v_rel,
+            p1_diag_km2=p1_diag,
+            p2_diag_km2=p2_diag,
+            hbr_meters=payload.hbr_meters,
+        )
+
+        # The optimizer works from a single combined covariance.
+        optimizer = TrajectoryOptimizer(
+            position_covariance_km2=np.diag(np.asarray(p1_diag) + np.asarray(p2_diag)),
+            hard_body_radius_km=payload.hbr_meters / 1000.0,
+            max_delta_v_mps=payload.max_delta_v_mps,
+            max_burn_lead_hours=payload.max_burn_lead_hours,
+        )
+        event = ConjunctionEvent(
+            event_id=f"{payload.primary_id}-{payload.secondary_id}",
+            satellite_id=payload.primary_id,
+            sat_state_vector=np.concatenate(
+                [primary.position_km, primary.velocity_km_s]
+            ),
+            object_state_vector=np.concatenate(
+                [secondary.position_km, secondary.velocity_km_s]
+            ),
+            tca=tca.replace(tzinfo=None),
+            probability_of_collision=before.poc,
+            mode="INDEPENDENT",
+            mesh_neighbors=None,
+        )
+
+        plan = optimizer.calculate_independent_avoidance(event)
+        baseline, maneuvered = optimizer.burn_comparison_tracks(
+            event, plan.delta_v, step_seconds=payload.step_seconds
+        )
+        post_burn_position = optimizer.position_at_tca(event, plan.delta_v)
+    except ManeuverConstraintError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PropagationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except CovarianceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500, detail=f"Maneuver planning failed: {exc}"
+        ) from exc
+
+    burn_time = plan.burn_time.replace(tzinfo=timezone.utc)
+    return ManeuverPlanResponse(
+        primary_name=primary_entry["name"],
+        secondary_name=secondary_entry["name"],
+        delta_v_m_s=[float(x) for x in plan.delta_v],
+        delta_v_magnitude_m_s=float(np.linalg.norm(plan.delta_v)),
+        burn_time=burn_time,
+        burn_lead_hours=(tca - burn_time).total_seconds() / 3600.0,
+        poc_before=float(before.poc),
+        poc_after=float(plan.new_probability),
+        miss_distance_before_km=float(before.dca_km),
+        miss_distance_after_km=float(
+            np.linalg.norm(post_burn_position - secondary.position_km)
+        ),
+        risk_before=RiskLevel(classify_risk(before.poc)),
+        requires_mesh_rerouting=plan.requires_mesh_rerouting,
+        baseline_track=[
+            _marker_from_position(primary_entry["name"], p, t) for t, p in baseline
+        ],
+        maneuvered_track=[
+            _marker_from_position(primary_entry["name"], p, t) for t, p in maneuvered
+        ],
+    )
 
 
 @router.post("/api/v1/mesh/node-sync", response_model=MeshNodeSyncResponse)

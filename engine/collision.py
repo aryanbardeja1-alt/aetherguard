@@ -28,6 +28,12 @@ MAX_HBR_KM: Final[float] = 0.1
 #: the series collapses to exactly 1. Short-circuit before (u/2)**k overflows.
 MAX_CHAN_U: Final[float] = 1e3
 
+#: Above this Chan parameter the miss exceeds ~39 sigma and PoC underflows past
+#: 1e-200. Left to run, the truncated series overflows ((v/2)**m -> inf) while
+#: exp(-v/2) underflows to 0, giving NaN — which a min/max clamp silently turns
+#: into 1.0, reporting a distant, safe pass as a certain collision.
+MAX_CHAN_V: Final[float] = 1.5e3
+
 
 class CovarianceError(Exception):
     """Raised when a projected covariance is singular or ill-conditioned."""
@@ -203,7 +209,9 @@ def integrate_poc_disk(
         epsabs=1e-10,
         epsrel=1e-6,
     )
-    return float(max(0.0, min(1.0, poc)))
+    if not np.isfinite(poc):
+        raise CovarianceError("Hard-body integral produced a non-finite PoC.")
+    return float(np.clip(poc, 0.0, 1.0))
 
 
 def chan_poc(
@@ -254,6 +262,11 @@ def chan_poc(
         # Returning here avoids (u/2)**k overflowing to inf and then NaN.
         return 1.0
 
+    if v > MAX_CHAN_V:
+        # Miss is tens of sigma out: PoC ~ (u/2)·exp(-v/2) is below 1e-200.
+        # Returning early keeps the series from overflowing into NaN.
+        return 0.0
+
     exp_neg_half_v = float(np.exp(-0.5 * v))
     exp_neg_half_u = float(np.exp(-0.5 * u))
 
@@ -275,7 +288,14 @@ def chan_poc(
         if m > 2 and abs(term) < tol * max(1.0, abs(poc)):
             break
 
-    return float(max(0.0, min(1.0, exp_neg_half_v * poc)))
+    result = exp_neg_half_v * poc
+    if not np.isfinite(result):
+        # Never clamp a NaN: min/max would quietly resolve it to 1.0.
+        raise CovarianceError(
+            f"Chan series produced a non-finite PoC (u={u:.3e}, v={v:.3e}); "
+            "the series overflowed rather than converging."
+        )
+    return float(np.clip(result, 0.0, 1.0))
 
 
 def coerce_covariance_3x3(
