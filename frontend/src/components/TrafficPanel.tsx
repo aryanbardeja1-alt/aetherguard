@@ -297,6 +297,35 @@ export default function TrafficPanel({
                     </dd>
                   </div>
                 </dl>
+                <p className="maneuver-plain">
+                  {maneuver.burn_direction === "prograde" ? (
+                    <>
+                      The thruster fires <strong>forwards</strong>, speeding the
+                      satellite up by {(maneuver.delta_v_magnitude_m_s * 100).toFixed(1)} cm/s.
+                      Going faster pushes it into a slightly <strong>wider</strong> orbit,
+                      so it drifts a little higher and runs a little late.
+                    </>
+                  ) : (
+                    <>
+                      The thruster fires <strong>backwards</strong>, slowing the
+                      satellite by {(maneuver.delta_v_magnitude_m_s * 100).toFixed(1)} cm/s.
+                      Going slower drops it into a slightly <strong>tighter</strong> orbit,
+                      so it sinks a little lower and runs a little early.
+                    </>
+                  )}{" "}
+                  That tiny change grows over the{" "}
+                  {maneuver.burn_lead_hours < 1
+                    ? `${(maneuver.burn_lead_hours * 60).toFixed(0)} minutes`
+                    : `${maneuver.burn_lead_hours.toFixed(1)} hours`}{" "}
+                  before the crossing, so by the time the two objects meet it is{" "}
+                  <strong>
+                    {maneuver.miss_distance_after_km < 1
+                      ? `${(maneuver.miss_distance_after_km * 1000).toFixed(0)} m`
+                      : `${maneuver.miss_distance_after_km.toFixed(2)} km`}
+                  </strong>{" "}
+                  off its old path — far enough to miss.
+                </p>
+
                 <SeparationChart plan={maneuver} />
 
                 <label className="exagg">

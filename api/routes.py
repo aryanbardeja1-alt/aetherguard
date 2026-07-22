@@ -18,6 +18,7 @@ from engine.catalog import (
 from engine.collision import CovarianceError, assess_collision, classify_risk
 from engine.geo import gmst_radians, teme_to_ecef, teme_to_latlon_alt
 from engine.propagator import PropagationError, propagate_tle, relative_state
+from engine.sampling import sample_by_turn_angle
 from engine.trajectory import ManeuverConstraintError, TrajectoryOptimizer
 from schemas.conjunction import (
     ConjunctionAssessRequest,
@@ -206,16 +207,32 @@ def sky_traffic_track(
 
     points: list[GeoMarker] = []
     try:
-        steps = min(int(track_minutes * 60.0 / sample_dt) + 1, 400)
-        for i in range(steps):
-            t = when + timedelta(seconds=i * sample_dt)
-            state = propagate_tle(
+        def state_at(offset_s: float):
+            return propagate_tle(
                 entry["line1"],
                 entry["line2"],
-                t,
+                when + timedelta(seconds=float(offset_s)),
                 name=entry["name"],
                 validate_with_skyfield=False,
             )
+
+        span_s = track_minutes * 60.0
+        if step_seconds is not None:
+            # Explicit step requested: honour it rather than adapting.
+            offsets = [
+                i * sample_dt
+                for i in range(min(int(span_s / sample_dt) + 1, 400))
+            ]
+        else:
+            # Even time steps starve perigee on eccentric orbits, drawing a
+            # chord straight across the fastest part of the pass. Put samples
+            # where the path actually bends instead.
+            offsets, _ = sample_by_turn_angle(
+                lambda t: state_at(t).position_km, 0.0, span_s, initial=48
+            )
+
+        for offset in offsets:
+            state = state_at(offset)
             lat, lon, alt = teme_to_latlon_alt(state.position_km, state.epoch)
             ecef = teme_to_ecef(state.position_km, state.epoch, gmst=gmst0)
             points.append(
@@ -446,7 +463,7 @@ def plan_maneuver(payload: ManeuverPlanRequest) -> ManeuverPlanResponse:
 
         plan = optimizer.calculate_independent_avoidance(event)
         baseline, maneuvered = optimizer.burn_comparison_tracks(
-            event, plan.delta_v, step_seconds=payload.step_seconds
+            event, plan.delta_v
         )
         post_burn_position = optimizer.position_at_tca(event, plan.delta_v)
 
@@ -480,6 +497,13 @@ def plan_maneuver(payload: ManeuverPlanRequest) -> ManeuverPlanResponse:
             np.linalg.norm(post_burn_position - secondary.position_km)
         ),
         risk_before=RiskLevel(classify_risk(before.poc)),
+        burn_direction=(
+            "none"
+            if float(np.linalg.norm(plan.delta_v)) == 0.0
+            else "prograde"
+            if float(np.dot(plan.delta_v, primary.velocity_km_s)) > 0.0
+            else "retrograde"
+        ),
         requires_mesh_rerouting=plan.requires_mesh_rerouting,
         baseline_track=[
             _marker_from_position(primary_entry["name"], p, t, gmst=gmst0)

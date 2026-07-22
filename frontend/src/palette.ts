@@ -9,8 +9,13 @@ export const TRACK = {
   primary: "#d4a574",
   secondary: "#7eb8a8",
   baseline: "#e85d4c",
-  maneuvered: "#5ee0b0",
-  burn: "#f0d98c",
+  /**
+   * Vivid fuchsia. Nothing else in the scene is near this hue — the globe is
+   * blue-teal and every other track is copper, sage, red or amber — so the new
+   * orbit reads instantly against all of them.
+   */
+  maneuvered: "#f45cf0",
+  burn: "#ffd24a",
 } as const;
 
 export const OBJECT_TYPE = {

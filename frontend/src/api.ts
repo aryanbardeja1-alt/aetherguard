@@ -65,6 +65,7 @@ export type ManeuverPlan = {
   miss_distance_before_km: number;
   miss_distance_after_km: number;
   risk_before: RiskLevel;
+  burn_direction: "prograde" | "retrograde" | "none";
   requires_mesh_rerouting: boolean;
   baseline_track: GeoMarker[];
   maneuvered_track: GeoMarker[];

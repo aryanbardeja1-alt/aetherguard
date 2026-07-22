@@ -17,7 +17,7 @@ line-of-sight occultation test lives here because no library provides it.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Final, List, Mapping, Optional, Tuple
+from typing import Final, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from astropy import units as u
@@ -28,6 +28,7 @@ from scipy.optimize import brentq
 
 from aether_core import ConjunctionEvent, ManeuverPlan
 from engine.collision import build_encounter_rotation, chan_poc, project_covariance_2d
+from engine.sampling import sample_by_turn_angle
 
 #: Collision probability that a maneuver must achieve.
 SAFE_PROBABILITY: Final[float] = 1e-6
@@ -79,14 +80,10 @@ def _line_of_sight_blocked(position_a_km: np.ndarray, position_b_km: np.ndarray)
     return bool(np.linalg.norm(closest) < _EARTH_RADIUS_KM)
 
 
-def _sample_trajectory(
-    position_km: np.ndarray,
-    velocity_km_s: np.ndarray,
-    epoch: datetime,
-    duration_seconds: float,
-    step_seconds: float,
-) -> List[Tuple[datetime, np.ndarray]]:
-    """Sample a two-body trajectory forward from a state, for visualisation."""
+def _position_sampler(
+    position_km: np.ndarray, velocity_km_s: np.ndarray, epoch: datetime
+):
+    """Return a function giving position at a time offset from ``epoch``."""
     orbit = Orbit.from_vectors(
         Earth,
         np.asarray(position_km, dtype=float) * u.km,
@@ -94,18 +91,26 @@ def _sample_trajectory(
         epoch=Time(epoch, scale="utc"),
     )
 
-    steps = int(np.clip(duration_seconds / step_seconds, 2, 600)) + 1
-    samples: List[Tuple[datetime, np.ndarray]] = []
-    for index in range(steps):
-        offset = index * (duration_seconds / (steps - 1))
-        propagated = orbit.propagate(offset * u.s)
-        samples.append(
-            (
-                epoch + timedelta(seconds=offset),
-                np.asarray(propagated.r.to(u.km).value, dtype=float),
-            )
+    def position_at(offset_s: float) -> np.ndarray:
+        return np.asarray(
+            orbit.propagate(float(offset_s) * u.s).r.to(u.km).value, dtype=float
         )
-    return samples
+
+    return position_at
+
+
+def _sample_trajectory(
+    position_km: np.ndarray,
+    velocity_km_s: np.ndarray,
+    epoch: datetime,
+    offsets: Sequence[float],
+) -> List[Tuple[datetime, np.ndarray]]:
+    """Evaluate a two-body trajectory at the given time offsets."""
+    position_at = _position_sampler(position_km, velocity_km_s, epoch)
+    return [
+        (epoch + timedelta(seconds=float(offset)), position_at(offset))
+        for offset in offsets
+    ]
 
 
 class TrajectoryOptimizer:
@@ -184,7 +189,7 @@ class TrajectoryOptimizer:
         delta_v_mps: np.ndarray,
         *,
         duration_seconds: Optional[float] = None,
-        step_seconds: float = 120.0,
+        max_points: int = 400,
     ) -> Tuple[List[Tuple[datetime, np.ndarray]], List[Tuple[datetime, np.ndarray]]]:
         """Return (baseline, post-burn) tracks starting at the burn point.
 
@@ -193,16 +198,41 @@ class TrajectoryOptimizer:
         and the maneuvered path with poliastro would show a divergence that has
         nothing to do with the burn.
 
-        Defaults to spanning burn → TCA → as far again beyond, so the crossing
-        geometry is visible on either side.
+        Spans at least one full revolution. Burn → TCA → as far again covers
+        only 38% of a Chandra-class orbit, which draws as an arc stub next to
+        the complete rings every other orbit renders as.
         """
         position, velocity, burn_time, lead_seconds = self._burn_state(event)
-        span = duration_seconds if duration_seconds is not None else lead_seconds * 2.0
 
-        baseline = _sample_trajectory(position, velocity, burn_time, span, step_seconds)
+        state = np.asarray(event.sat_state_vector, dtype=float)
+        period_s = float(
+            Orbit.from_vectors(
+                Earth, state[:3] * u.km, state[3:] * u.km / u.s
+            ).period.to(u.s).value
+        )
+        span = (
+            duration_seconds
+            if duration_seconds is not None
+            else max(lead_seconds * 2.0, period_s)
+        )
+
+        # Both tracks must share one time grid: the separation chart, the
+        # closest-approach marker and the globe exaggeration all pair the two
+        # by index. Sampling each adaptively on its own would give them
+        # different counts at different moments.
+        offsets, _ = sample_by_turn_angle(
+            _position_sampler(position, velocity, burn_time),
+            0.0,
+            span,
+            initial=48,
+            max_points=max_points,
+        )
+
         boosted = velocity + np.asarray(delta_v_mps, dtype=float) / 1000.0
-        maneuvered = _sample_trajectory(position, boosted, burn_time, span, step_seconds)
-        return baseline, maneuvered
+        return (
+            _sample_trajectory(position, velocity, burn_time, offsets),
+            _sample_trajectory(position, boosted, burn_time, offsets),
+        )
 
     def _mesh_is_disrupted(
         self, event: ConjunctionEvent, post_burn_position_km: np.ndarray

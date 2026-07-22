@@ -199,6 +199,9 @@ class ManeuverPlanResponse(BaseModel):
     miss_distance_before_km: float
     miss_distance_after_km: float
     risk_before: RiskLevel
+    burn_direction: Literal["prograde", "retrograde", "none"] = Field(
+        description="Whether the burn speeds the satellite up or slows it down"
+    )
     requires_mesh_rerouting: bool
     baseline_track: list[GeoMarker] = Field(description="Trajectory with no burn")
     maneuvered_track: list[GeoMarker] = Field(description="Trajectory after the burn")

@@ -156,7 +156,9 @@ function ManeuverPaths({ plan, exaggeration }: { plan: ManeuverPlan; exaggeratio
   return (
     <group>
       <OrbitPath points={plan.baseline_track} color={TRACK.baseline} dashed opacity={burned ? 0.55 : 0.9} />
-      {burned && <OrbitPath points={amplified} color={TRACK.maneuvered} lineWidth={2.8} />}
+      {burned && (
+        <OrbitPath points={amplified} color={TRACK.maneuvered} lineWidth={3.6} opacity={1} />
+      )}
       {burned && amplified.length > 0 && <BurnMarker point={amplified[0]} />}
       {burned && amplified.length > 2 && (
         <MissMarker
