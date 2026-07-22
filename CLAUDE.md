@@ -1,4 +1,4 @@
-# AetherGuard - Claude Code Instructions
+# AetherGuard 
 
 ## WHAT & WHY: Project Overview
 AetherGuard is an onboard framework for satellite collision avoidance and self-healing mesh networks. It merges ground-based conjunction data with onboard trajectory planning to generate evasive maneuvers without breaking optical mesh links.
