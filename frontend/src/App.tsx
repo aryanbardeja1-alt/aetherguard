@@ -21,6 +21,8 @@ export default function App() {
   const [selectedTrack, setSelectedTrack] = useState<GeoMarker[]>([]);
   const [primaryId, setPrimaryId] = useState<string | null>(null);
   const [secondaryId, setSecondaryId] = useState<string | null>(null);
+  const [primaryTrack, setPrimaryTrack] = useState<GeoMarker[]>([]);
+  const [secondaryTrack, setSecondaryTrack] = useState<GeoMarker[]>([]);
   const [assessBusy, setAssessBusy] = useState(false);
   const [assessError, setAssessError] = useState<string | null>(null);
   const [result, setResult] = useState<AssessResponse | null>(null);
@@ -64,24 +66,53 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [loadTraffic]);
 
-  const onSelect = useCallback(
-    async (id: string) => {
-      if (!id) {
-        setSelectedId(null);
-        setSelectedTrack([]);
-        return;
-      }
-      setSelectedId(id);
+  const onSelect = useCallback(async (id: string) => {
+    if (!id) {
+      setSelectedId(null);
+      setSelectedTrack([]);
+      return;
+    }
+    setSelectedId(id);
+    try {
+      const track = await fetchSatTrack(id);
+      setSelectedTrack(track.points);
+    } catch (err) {
+      setSelectedTrack([]);
+      setLoadError(err instanceof Error ? `Orbit track: ${err.message}` : "Orbit track failed");
+    }
+  }, []);
+
+  // When both pair roles are set, load only those two orbits for the globe.
+  useEffect(() => {
+    let cancelled = false;
+    if (!primaryId || !secondaryId) {
+      setPrimaryTrack([]);
+      setSecondaryTrack([]);
+      return;
+    }
+    (async () => {
       try {
-        const track = await fetchSatTrack(id);
-        setSelectedTrack(track.points);
+        const [pTrack, sTrack] = await Promise.all([
+          fetchSatTrack(primaryId),
+          fetchSatTrack(secondaryId),
+        ]);
+        if (!cancelled) {
+          setPrimaryTrack(pTrack.points);
+          setSecondaryTrack(sTrack.points);
+          setSelectedTrack([]);
+        }
       } catch (err) {
-        setSelectedTrack([]);
-        setLoadError(err instanceof Error ? `Orbit track: ${err.message}` : "Orbit track failed");
+        if (!cancelled) {
+          setPrimaryTrack([]);
+          setSecondaryTrack([]);
+          setLoadError(err instanceof Error ? `Pair tracks: ${err.message}` : "Pair tracks failed");
+        }
       }
-    },
-    [],
-  );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [primaryId, secondaryId]);
 
   const onAssessPair = useCallback(async () => {
     const primary = traffic.find((s) => s.id === primaryId);
@@ -134,6 +165,8 @@ export default function App() {
     setSelectedTrack([]);
     setPrimaryId(null);
     setSecondaryId(null);
+    setPrimaryTrack([]);
+    setSecondaryTrack([]);
     setResult(null);
     setAssessError(null);
     setManeuver(null);
@@ -148,6 +181,10 @@ export default function App() {
           traffic={traffic}
           selectedId={selectedId}
           selectedTrack={selectedTrack}
+          primaryId={primaryId}
+          secondaryId={secondaryId}
+          primaryTrack={primaryTrack}
+          secondaryTrack={secondaryTrack}
           result={result}
           maneuver={maneuver}
           onSelect={onSelect}
@@ -164,7 +201,9 @@ export default function App() {
         </p>
         <h1 className="brand">AetherGuard</h1>
         <p className="tagline">
-          Click any satellite to expand — full catalog on the globe, no manual fetch.
+          {primaryId && secondaryId
+            ? "Pair locked — only primary and secondary are shown on the globe."
+            : "Click any satellite to expand — set primary & secondary to focus the pair."}
           {catalogMeta
             ? ` ${catalogMeta.count} on orbit${catalogMeta.skipped ? ` (${catalogMeta.skipped} skipped)` : ""}.`
             : ""}

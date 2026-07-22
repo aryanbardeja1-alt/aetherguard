@@ -478,6 +478,10 @@ body {
   border-radius: 2px;
 }
 
+.sat-tag.secondary {
+  background: var(--mist);
+}
+
 @keyframes rise {
   from {
     opacity: 0;

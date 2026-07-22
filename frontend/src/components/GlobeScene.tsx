@@ -203,19 +203,23 @@ function OrbitPath({
 function TrafficMarker({
   sat,
   selected,
+  role,
   onSelect,
 }: {
   sat: SkyTrafficSat;
   selected: boolean;
+  role?: "primary" | "secondary" | null;
   onSelect: (id: string) => void;
 }) {
   const ref = useRef<THREE.Mesh>(null);
-  const color = typeColor(sat.object_type);
+  const color =
+    role === "primary" ? "#d4a574" : role === "secondary" ? "#7eb8a8" : typeColor(sat.object_type);
+  const highlighted = selected || Boolean(role);
   const pos = latLonToVec3(sat.lat_deg, sat.lon_deg, sat.alt_km);
-  const size = markerSize(sat.alt_km, selected);
+  const size = markerSize(sat.alt_km, highlighted);
 
   useFrame(({ clock }) => {
-    if (!ref.current || !selected) return;
+    if (!ref.current || !highlighted) return;
     ref.current.scale.setScalar(1 + Math.sin(clock.elapsedTime * 3.5) * 0.2);
   });
 
@@ -223,6 +227,13 @@ function TrafficMarker({
     event.stopPropagation();
     onSelect(sat.id);
   };
+
+  const label =
+    role === "primary"
+      ? `P · ${sat.name}`
+      : role === "secondary"
+        ? `S · ${sat.name}`
+        : sat.name;
 
   return (
     <group position={pos}>
@@ -243,13 +254,13 @@ function TrafficMarker({
         <meshStandardMaterial
           color={color}
           emissive={color}
-          emissiveIntensity={selected ? 0.55 : 0.32}
+          emissiveIntensity={highlighted ? 0.55 : 0.32}
           roughness={0.35}
         />
       </mesh>
-      {selected && (
+      {highlighted && (
         <Html distanceFactor={8} style={{ pointerEvents: "none" }} zIndexRange={[100, 0]}>
-          <div className="sat-tag">{sat.name}</div>
+          <div className={`sat-tag ${role ?? ""}`}>{label}</div>
         </Html>
       )}
     </group>
@@ -271,25 +282,33 @@ function LinkLine({ a, b, risk }: { a: GeoMarker; b: GeoMarker; risk: string }) 
 }
 
 function FrameSelected({
-  sat,
+  sats,
   controlsRef,
 }: {
-  sat: SkyTrafficSat | null;
+  sats: SkyTrafficSat[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   controlsRef: RefObject<any>;
 }) {
   const { camera } = useThree();
 
   useEffect(() => {
-    if (!sat || !controlsRef.current) return;
-    const pos = latLonToVec3(sat.lat_deg, sat.lon_deg, sat.alt_km);
-    const need = Math.max(5.0, pos.length() * 2.35);
+    if (!sats.length || !controlsRef.current) return;
+    const center = new THREE.Vector3();
+    let maxR = 0;
+    for (const sat of sats) {
+      const pos = latLonToVec3(sat.lat_deg, sat.lon_deg, sat.alt_km);
+      center.add(pos);
+      maxR = Math.max(maxR, pos.length());
+    }
+    center.multiplyScalar(1 / sats.length);
+    const need = Math.max(5.0, maxR * 2.35, center.length() + maxR);
     const dir = camera.position.clone().normalize();
     camera.position.copy(dir.multiplyScalar(need));
+    controlsRef.current.target.copy(center.multiplyScalar(0.15));
     controlsRef.current.minDistance = 1.6;
     controlsRef.current.maxDistance = Math.max(22, need * 1.5);
     controlsRef.current.update();
-  }, [sat, camera, controlsRef]);
+  }, [sats, camera, controlsRef]);
 
   return null;
 }
@@ -298,6 +317,10 @@ type GlobeSceneProps = {
   traffic: SkyTrafficSat[];
   selectedId: string | null;
   selectedTrack: GeoMarker[];
+  primaryId: string | null;
+  secondaryId: string | null;
+  primaryTrack: GeoMarker[];
+  secondaryTrack: GeoMarker[];
   result: AssessResponse | null;
   maneuver: ManeuverPlan | null;
   onSelect: (id: string) => void;
@@ -307,12 +330,27 @@ export default function GlobeScene({
   traffic,
   selectedId,
   selectedTrack,
+  primaryId,
+  secondaryId,
+  primaryTrack,
+  secondaryTrack,
   result,
   maneuver,
   onSelect,
 }: GlobeSceneProps) {
   const controlsRef = useRef(null);
-  const selected = traffic.find((s) => s.id === selectedId) ?? null;
+  const pairMode = Boolean(primaryId && secondaryId);
+
+  const visible = useMemo(() => {
+    if (!pairMode) return traffic;
+    return traffic.filter((s) => s.id === primaryId || s.id === secondaryId);
+  }, [traffic, pairMode, primaryId, secondaryId]);
+
+  const focusSats = useMemo(() => {
+    if (pairMode) return visible;
+    const selected = traffic.find((s) => s.id === selectedId);
+    return selected ? [selected] : [];
+  }, [pairMode, visible, traffic, selectedId]);
 
   return (
     <Canvas
@@ -327,20 +365,31 @@ export default function GlobeScene({
       <directionalLight position={[-3, -1, -2]} intensity={0.35} color="#6a9eab" />
       <Stars radius={120} depth={50} count={3600} factor={3.2} saturation={0} fade speed={0.35} />
       <Earth />
-      {traffic.map((sat) => (
+      {visible.map((sat) => (
         <TrafficMarker
           key={sat.id}
           sat={sat}
           selected={sat.id === selectedId}
+          role={
+            sat.id === primaryId ? "primary" : sat.id === secondaryId ? "secondary" : null
+          }
           onSelect={onSelect}
         />
       ))}
-      {selectedTrack.length > 0 && <OrbitPath points={selectedTrack} color="#d4a574" />}
+      {!pairMode && selectedTrack.length > 0 && (
+        <OrbitPath points={selectedTrack} color="#d4a574" />
+      )}
+      {pairMode && primaryTrack.length > 0 && (
+        <OrbitPath points={primaryTrack} color="#d4a574" />
+      )}
+      {pairMode && secondaryTrack.length > 0 && (
+        <OrbitPath points={secondaryTrack} color="#7eb8a8" />
+      )}
       {maneuver && <ManeuverPaths plan={maneuver} />}
       {result?.primary && result?.secondary && (
         <LinkLine a={result.primary} b={result.secondary} risk={result.risk_level} />
       )}
-      <FrameSelected sat={selected} controlsRef={controlsRef} />
+      <FrameSelected sats={focusSats} controlsRef={controlsRef} />
       <OrbitControls
         ref={controlsRef}
         enablePan={false}
