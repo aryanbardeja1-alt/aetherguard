@@ -1,0 +1,15 @@
+# Keep Docker/Railway builds lean — secrets and local caches stay out of the image.
+.git
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.env
+.DS_Store
+frontend/node_modules
+tests
+*.md
+.claude
+agent-transcripts
