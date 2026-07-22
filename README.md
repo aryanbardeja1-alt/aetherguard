@@ -1,6 +1,6 @@
 # AetherGuard
 
-Autonomous orbital safety platform for **conjunction assessment**, **evasive maneuver planning**, and **self-healing mesh routing** — with a live 3D globe UI.
+Autonomous orbital safety platform for **conjunction assessment** and **evasive maneuver planning** — with a live 3D globe UI.
 
 AetherGuard propagates TLEs with SGP4, evaluates probability of collision (Pc) in the encounter (B) plane, plans avoidance burns, and visualizes catalog traffic so operators can pick a pair and act.
 
