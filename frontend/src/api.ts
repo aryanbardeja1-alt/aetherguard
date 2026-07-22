@@ -58,6 +58,7 @@ export type ManeuverPlan = {
   delta_v_m_s: number[];
   delta_v_magnitude_m_s: number;
   burn_time: string;
+  tca: string;
   burn_lead_hours: number;
   poc_before: number;
   poc_after: number;

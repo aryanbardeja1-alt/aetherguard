@@ -9,21 +9,28 @@ import { OBJECT_TYPE, TRACK } from "../palette";
 const EARTH_R = 1;
 const EARTH_KM = 6378.137;
 
+/** How far above the surface the reference altitude sits, in Earth radii. */
+const VIEW_LIFT = 2.6;
+/** Below this, altitude is spread generously so LEO clears the surface. */
+const SOFT_KM = 1500;
+/** Altitude mapped to the full lift; beyond it the curve keeps rising slowly. */
+const REFERENCE_ALT_KM = 140000;
+
 /**
- * Compress true altitude so LEO / MEO / GEO / HEO all stay in a shared view
- * shell while still reading as "farther out" than LEO.
+ * Compress true altitude so LEO through deep HEO share one view shell.
+ *
+ * Smooth and strictly monotonic by construction. The previous piecewise
+ * version kinked at its 2,000 km and 36,000 km seams and clamped everything
+ * above 136,000 km to a single radius, which flattened the top of any orbit
+ * reaching that high — a Chandra-class ellipse came out as neither ellipse nor
+ * circle. Radial compression still distorts proportions, unavoidably so when
+ * one view spans a 400 km orbit and a 137,000 km one, but shapes stay smooth
+ * closed curves.
  */
 export function displayAltitudeKm(altKm: number): number {
   const alt = Math.max(altKm, 120);
-  if (alt <= 2000) return alt;
-  if (alt <= 36000) {
-    // MEO → GEO belt: map into ~0.3–1.6 R above the surface
-    const t = (alt - 2000) / (36000 - 2000);
-    return 2000 + t * 10000;
-  }
-  // HEO / science missions beyond GEO
-  const t = Math.min(1, (alt - 36000) / 100000);
-  return 12000 + t * 6000;
+  const t = Math.log1p(alt / SOFT_KM) / Math.log1p(REFERENCE_ALT_KM / SOFT_KM);
+  return EARTH_KM * VIEW_LIFT * t;
 }
 
 export function latLonToVec3(lat: number, lon: number, altKm: number, scale = EARTH_R): THREE.Vector3 {
@@ -122,15 +129,80 @@ function Earth() {
  * propagator starting at the burn point, so they leave together and the gap
  * that opens is the maneuver.
  */
-function ManeuverPaths({ plan }: { plan: ManeuverPlan }) {
+function ManeuverPaths({ plan, exaggeration }: { plan: ManeuverPlan; exaggeration: number }) {
   const burned = plan.delta_v_magnitude_m_s > 0;
+
+  // A burn opens a gap of order a kilometre. Against a 6,378 km globe that is
+  // well under a pixel, so at 1x the two paths overlap exactly and the
+  // maneuver looks like it did nothing. Scaling the offset from the baseline
+  // is the only way to see it; the panel states the factor so the geometry is
+  // never mistaken for true scale.
+  const amplified = useMemo(() => {
+    if (exaggeration <= 1) return plan.maneuvered_track;
+    const n = Math.min(plan.baseline_track.length, plan.maneuvered_track.length);
+    return plan.maneuvered_track.slice(0, n).map((point, i) => {
+      const base = plan.baseline_track[i].position_km;
+      return {
+        ...point,
+        position_km: point.position_km.map(
+          (v, axis) => base[axis] + (v - base[axis]) * exaggeration,
+        ),
+      };
+    });
+  }, [plan, exaggeration]);
+
+  const tcaIndex = Math.floor((amplified.length - 1) / 2);
+
   return (
     <group>
       <OrbitPath points={plan.baseline_track} color={TRACK.baseline} dashed opacity={burned ? 0.55 : 0.9} />
-      {burned && <OrbitPath points={plan.maneuvered_track} color={TRACK.maneuvered} lineWidth={2.4} />}
-      {burned && plan.maneuvered_track.length > 0 && (
-        <BurnMarker point={plan.maneuvered_track[0]} />
+      {burned && <OrbitPath points={amplified} color={TRACK.maneuvered} lineWidth={2.8} />}
+      {burned && amplified.length > 0 && <BurnMarker point={amplified[0]} />}
+      {burned && amplified.length > 2 && (
+        <MissMarker
+          baseline={plan.baseline_track[tcaIndex]}
+          maneuvered={amplified[tcaIndex]}
+          missKm={plan.miss_distance_after_km}
+        />
       )}
+    </group>
+  );
+}
+
+/** Closest approach: joins where the satellite would have been to where it is. */
+function MissMarker({
+  baseline,
+  maneuvered,
+  missKm,
+}: {
+  baseline: GeoMarker;
+  maneuvered: GeoMarker;
+  missKm: number;
+}) {
+  const points = useMemo(
+    () =>
+      [
+        ecefKmToVec3(baseline.position_km).toArray(),
+        ecefKmToVec3(maneuvered.position_km).toArray(),
+      ] as [number, number, number][],
+    [baseline, maneuvered],
+  );
+  const tip = useMemo(() => ecefKmToVec3(maneuvered.position_km), [maneuvered]);
+
+  return (
+    <group>
+      <Line points={points} color={TRACK.burn} lineWidth={1.4} transparent opacity={0.8} />
+      <group position={tip}>
+        <mesh>
+          <sphereGeometry args={[0.016, 10, 10]} />
+          <meshStandardMaterial color={TRACK.maneuvered} emissive={TRACK.maneuvered} emissiveIntensity={0.7} />
+        </mesh>
+        <Html distanceFactor={9} style={{ pointerEvents: "none" }} zIndexRange={[100, 0]}>
+          <div className="sat-tag miss">
+            {missKm < 1 ? `${(missKm * 1000).toFixed(0)} m` : `${missKm.toFixed(2)} km`}
+          </div>
+        </Html>
+      </group>
     </group>
   );
 }
@@ -315,6 +387,7 @@ type GlobeSceneProps = {
   secondaryTrack: GeoMarker[];
   result: AssessResponse | null;
   maneuver: ManeuverPlan | null;
+  exaggeration: number;
   onSelect: (id: string) => void;
 };
 
@@ -328,6 +401,7 @@ export default function GlobeScene({
   secondaryTrack,
   result,
   maneuver,
+  exaggeration,
   onSelect,
 }: GlobeSceneProps) {
   const controlsRef = useRef(null);
@@ -377,7 +451,7 @@ export default function GlobeScene({
       {pairMode && secondaryTrack.length > 0 && (
         <OrbitPath points={secondaryTrack} color={TRACK.secondary} />
       )}
-      {maneuver && <ManeuverPaths plan={maneuver} />}
+      {maneuver && <ManeuverPaths plan={maneuver} exaggeration={exaggeration} />}
       {result?.primary && result?.secondary && (
         <LinkLine a={result.primary} b={result.secondary} risk={result.risk_level} />
       )}

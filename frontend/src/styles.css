@@ -841,3 +841,67 @@ body {
 .pair-role.sec {
   background: var(--mist);
 }
+
+/* --- Separation chart & exaggeration ----------------------------------- */
+
+.sep-chart {
+  margin: 0.65rem 0 0;
+}
+
+.sep-chart figcaption {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fog);
+  margin-bottom: 0.25rem;
+}
+
+.sep-chart svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.sep-tick {
+  fill: var(--fog);
+  font-family: var(--mono);
+  font-size: 7px;
+}
+
+.exagg {
+  display: block;
+  margin-top: 0.7rem;
+}
+
+.exagg > span {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fog);
+}
+
+.exagg > span strong {
+  color: var(--paper);
+}
+
+.exagg input[type="range"] {
+  width: 100%;
+  margin: 0.3rem 0 0.15rem;
+  accent-color: var(--mist);
+}
+
+.exagg small {
+  display: block;
+  font-size: 0.66rem;
+  line-height: 1.4;
+  color: var(--fog);
+  opacity: 0.85;
+}
+
+.sat-tag.miss {
+  color: #5ee0b0;
+  border-color: rgba(94, 224, 176, 0.5);
+}

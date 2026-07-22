@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { AssessResponse, ManeuverPlan, SkyTrafficSat, TestbedPair } from "../api";
+import SeparationChart from "./SeparationChart";
 
 type TrafficPanelProps = {
   traffic: SkyTrafficSat[];
@@ -24,6 +25,8 @@ type TrafficPanelProps = {
   onDeployTestbed: () => void;
   onClearTestbed: () => void;
   onUsePair: (pair: TestbedPair) => void;
+  exaggeration: number;
+  onExaggerationChange: (value: number) => void;
 };
 
 export default function TrafficPanel({
@@ -49,6 +52,8 @@ export default function TrafficPanel({
   onDeployTestbed,
   onClearTestbed,
   onUsePair,
+  exaggeration,
+  onExaggerationChange,
 }: TrafficPanelProps) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "station" | "visual" | "active">("all");
@@ -292,10 +297,26 @@ export default function TrafficPanel({
                     </dd>
                   </div>
                 </dl>
-                <p className="maneuver-legend">
-                  <span className="swatch baseline" /> no burn
-                  <span className="swatch burned" /> after burn
-                </p>
+                <SeparationChart plan={maneuver} />
+
+                <label className="exagg">
+                  <span>
+                    Globe exaggeration <strong>{exaggeration}×</strong>
+                  </span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={1000}
+                    step={1}
+                    value={exaggeration}
+                    onChange={(e) => onExaggerationChange(Number(e.target.value))}
+                  />
+                  <small>
+                    The real gap is under a pixel at globe scale. The chart above is
+                    true to scale; the 3D paths are not.
+                  </small>
+                </label>
+
                 {maneuver.requires_mesh_rerouting && (
                   <p className="maneuver-mesh">Mesh rerouting required</p>
                 )}

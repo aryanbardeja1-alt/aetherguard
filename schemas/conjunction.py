@@ -192,6 +192,7 @@ class ManeuverPlanResponse(BaseModel):
     delta_v_m_s: list[float] = Field(description="Burn vector [dvx, dvy, dvz] (m/s)")
     delta_v_magnitude_m_s: float
     burn_time: datetime
+    tca: datetime = Field(description="Time of closest approach the plan targets")
     burn_lead_hours: float = Field(description="How far before TCA the burn sits")
     poc_before: float
     poc_after: float

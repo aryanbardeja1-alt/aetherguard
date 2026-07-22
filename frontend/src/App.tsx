@@ -37,6 +37,7 @@ export default function App() {
   const [catalogMeta, setCatalogMeta] = useState<{ count: number; skipped: number } | null>(null);
   const [testbed, setTestbed] = useState<TestbedPair[]>([]);
   const [testbedBusy, setTestbedBusy] = useState(false);
+  const [exaggeration, setExaggeration] = useState(200);
 
   useEffect(() => {
     let alive = true;
@@ -120,6 +121,18 @@ export default function App() {
     };
   }, [primaryId, secondaryId]);
 
+  // A conjunction exists only at its own moment. Both assessment and planning
+  // must use it, or the pair is assessed half an orbit apart and reads as Pc 0
+  // while the planner — which did use the TCA — reports a burn is needed.
+  const pairTca = useCallback(() => {
+    const pair = testbed.find(
+      (t) =>
+        (t.id === primaryId && t.target_id === secondaryId) ||
+        (t.id === secondaryId && t.target_id === primaryId),
+    );
+    return pair?.tca;
+  }, [testbed, primaryId, secondaryId]);
+
   const onAssessPair = useCallback(async () => {
     const primary = traffic.find((s) => s.id === primaryId);
     const secondary = traffic.find((s) => s.id === secondaryId);
@@ -136,7 +149,7 @@ export default function App() {
           line1: secondary.line1,
           line2: secondary.line2,
         },
-        target_time: new Date().toISOString(),
+        target_time: pairTca() ?? new Date().toISOString(),
         hbr_meters: 20,
         P1_diag: [variance, variance, variance],
         P2_diag: [variance, variance, variance],
@@ -149,7 +162,7 @@ export default function App() {
     } finally {
       setAssessBusy(false);
     }
-  }, [traffic, primaryId, secondaryId]);
+  }, [traffic, primaryId, secondaryId, pairTca]);
 
   const onSimulateManeuver = useCallback(async () => {
     if (!primaryId || !secondaryId) return;
@@ -157,22 +170,14 @@ export default function App() {
     setManeuverBusy(true);
     setManeuverError(null);
     try {
-      // A conjunction happens at a specific moment. If this pair came from the
-      // testbed, plan against its solved TCA rather than "now", or the two are
-      // half an orbit apart and there is nothing to avoid.
-      const pair = testbed.find(
-        (t) =>
-          (t.id === primaryId && t.target_id === secondaryId) ||
-          (t.id === secondaryId && t.target_id === primaryId),
-      );
-      setManeuver(await planManeuver(primaryId, secondaryId, pair?.tca));
+      setManeuver(await planManeuver(primaryId, secondaryId, pairTca()));
     } catch (err) {
       setManeuver(null);
       setManeuverError(err instanceof Error ? err.message : "Maneuver planning failed");
     } finally {
       setManeuverBusy(false);
     }
-  }, [primaryId, secondaryId, testbed]);
+  }, [primaryId, secondaryId, pairTca]);
 
   const onDeployTestbed = useCallback(async () => {
     setTestbedBusy(true);
@@ -237,6 +242,7 @@ export default function App() {
           secondaryTrack={secondaryTrack}
           result={result}
           maneuver={maneuver}
+          exaggeration={exaggeration}
           onSelect={onSelect}
         />
       </div>
@@ -279,6 +285,8 @@ export default function App() {
         onDeployTestbed={onDeployTestbed}
         onClearTestbed={onClearTestbed}
         onUsePair={onUsePair}
+        exaggeration={exaggeration}
+        onExaggerationChange={setExaggeration}
         maneuverBusy={maneuverBusy}
         maneuverError={maneuverError}
       />

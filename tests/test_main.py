@@ -512,3 +512,34 @@ class TestPlanManeuver:
         )
         assert response.status_code == 422
         assert "physical band" in response.json()["detail"]
+
+    def test_plan_reports_the_tca_it_targeted(self) -> None:
+        """The UI assesses and plans at this moment; without it, it uses 'now'
+        and a pair that conjuncts hours away reads as Pc 0."""
+        response = client.post(
+            "/api/v1/plan-maneuver",
+            json={
+                "primary_id": CO_LOCATED_PRIMARY,
+                "secondary_id": CO_LOCATED_SECONDARY,
+                "target_time": "2026-08-01T12:00:00Z",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["tca"].startswith("2026-08-01T12:00:00")
+
+    def test_testbed_pair_is_dangerous_at_its_tca_but_not_now(self) -> None:
+        """Pins the bug where assessment ran at 'now' and reported Pc 0 while
+        the planner, using the TCA, reported a burn was needed."""
+        deployed = client.post("/api/v1/testbed/deploy", json={}).json()["deployed"]
+        pair = deployed[1]
+
+        at_tca = client.post(
+            "/api/v1/plan-maneuver",
+            json={
+                "primary_id": pair["id"],
+                "secondary_id": pair["target_id"],
+                "target_time": pair["tca"],
+            },
+        ).json()
+        assert at_tca["poc_before"] > 1e-6
+        assert at_tca["delta_v_magnitude_m_s"] > 0.0

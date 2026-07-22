@@ -471,6 +471,7 @@ def plan_maneuver(payload: ManeuverPlanRequest) -> ManeuverPlanResponse:
         delta_v_m_s=[float(x) for x in plan.delta_v],
         delta_v_magnitude_m_s=float(np.linalg.norm(plan.delta_v)),
         burn_time=burn_time,
+        tca=tca,
         burn_lead_hours=(tca - burn_time).total_seconds() / 3600.0,
         poc_before=float(before.poc),
         poc_after=float(plan.new_probability),
