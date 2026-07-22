@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { AssessResponse, ManeuverPlan, SkyTrafficSat } from "../api";
+import type { AssessResponse, ManeuverPlan, SkyTrafficSat, TestbedPair } from "../api";
 
 type TrafficPanelProps = {
   traffic: SkyTrafficSat[];
@@ -19,6 +19,11 @@ type TrafficPanelProps = {
   maneuver: ManeuverPlan | null;
   maneuverBusy: boolean;
   maneuverError: string | null;
+  testbed: TestbedPair[];
+  testbedBusy: boolean;
+  onDeployTestbed: () => void;
+  onClearTestbed: () => void;
+  onUsePair: (pair: TestbedPair) => void;
 };
 
 export default function TrafficPanel({
@@ -39,6 +44,11 @@ export default function TrafficPanel({
   maneuver,
   maneuverBusy,
   maneuverError,
+  testbed,
+  testbedBusy,
+  onDeployTestbed,
+  onClearTestbed,
+  onUsePair,
 }: TrafficPanelProps) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "station" | "visual" | "active">("all");
@@ -163,11 +173,52 @@ export default function TrafficPanel({
         </div>
       )}
 
+      <div className="testbed">
+        <div className="testbed-head">
+          <h3>Test conjunctions</h3>
+          <button
+            type="button"
+            className="btn ghost small"
+            disabled={testbedBusy}
+            onClick={testbed.length ? onClearTestbed : onDeployTestbed}
+          >
+            {testbedBusy ? "Working…" : testbed.length ? "Remove" : "Deploy"}
+          </button>
+        </div>
+        {testbed.length === 0 ? (
+          <p className="testbed-hint">
+            No real catalog pair passes close enough to need a burn. Deploy
+            AetherGuard satellites on collision courses to try the planner.
+          </p>
+        ) : (
+          <ul className="testbed-list">
+            {testbed.map((pair) => (
+              <li key={pair.id}>
+                <button type="button" onClick={() => onUsePair(pair)}>
+                  <span className="testbed-name">
+                    {pair.name} <em>vs</em> {pair.target_name}
+                  </span>
+                  <span className="testbed-sub">
+                    {pair.miss_distance_km < 1
+                      ? `${(pair.miss_distance_km * 1000).toFixed(0)} m`
+                      : `${pair.miss_distance_km.toFixed(2)} km`}{" "}
+                    miss · {pair.relative_speed_km_s.toFixed(2)} km/s closing
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       <div className="assess-strip">
-        <p>
-          Pair: <strong>{primaryId ? traffic.find((s) => s.id === primaryId)?.name ?? "—" : "—"}</strong>
-          {" × "}
-          <strong>{secondaryId ? traffic.find((s) => s.id === secondaryId)?.name ?? "—" : "—"}</strong>
+        <p className="pair-line">
+          <span className="pair-role">P</span>
+          <strong>{primaryId ? traffic.find((s) => s.id === primaryId)?.name ?? "—" : "Pick a primary"}</strong>
+        </p>
+        <p className="pair-line">
+          <span className="pair-role sec">S</span>
+          <strong>{secondaryId ? traffic.find((s) => s.id === secondaryId)?.name ?? "—" : "Pick a secondary"}</strong>
         </p>
         <div className="assess-actions">
           <button

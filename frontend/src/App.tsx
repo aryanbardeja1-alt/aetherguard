@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import GlobeScene from "./components/GlobeScene";
+import Legend from "./components/Legend";
 import TrafficPanel from "./components/TrafficPanel";
 import {
   assessConjunction,
   checkHealth,
+  clearTestbed,
+  deployTestbed,
   fetchSatTrack,
   fetchSkyTraffic,
   planManeuver,
@@ -11,6 +14,7 @@ import {
   type GeoMarker,
   type ManeuverPlan,
   type SkyTrafficSat,
+  type TestbedPair,
 } from "./api";
 
 export default function App() {
@@ -31,6 +35,8 @@ export default function App() {
   const [maneuverError, setManeuverError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [catalogMeta, setCatalogMeta] = useState<{ count: number; skipped: number } | null>(null);
+  const [testbed, setTestbed] = useState<TestbedPair[]>([]);
+  const [testbedBusy, setTestbedBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -151,14 +157,58 @@ export default function App() {
     setManeuverBusy(true);
     setManeuverError(null);
     try {
-      setManeuver(await planManeuver(primaryId, secondaryId));
+      // A conjunction happens at a specific moment. If this pair came from the
+      // testbed, plan against its solved TCA rather than "now", or the two are
+      // half an orbit apart and there is nothing to avoid.
+      const pair = testbed.find(
+        (t) =>
+          (t.id === primaryId && t.target_id === secondaryId) ||
+          (t.id === secondaryId && t.target_id === primaryId),
+      );
+      setManeuver(await planManeuver(primaryId, secondaryId, pair?.tca));
     } catch (err) {
       setManeuver(null);
       setManeuverError(err instanceof Error ? err.message : "Maneuver planning failed");
     } finally {
       setManeuverBusy(false);
     }
-  }, [primaryId, secondaryId]);
+  }, [primaryId, secondaryId, testbed]);
+
+  const onDeployTestbed = useCallback(async () => {
+    setTestbedBusy(true);
+    setLoadError(null);
+    try {
+      const response = await deployTestbed();
+      setTestbed(response.deployed);
+      await loadTraffic();
+    } catch (err) {
+      setLoadError(err instanceof Error ? `Testbed: ${err.message}` : "Testbed deploy failed");
+    } finally {
+      setTestbedBusy(false);
+    }
+  }, [loadTraffic]);
+
+  const onClearTestbed = useCallback(async () => {
+    setTestbedBusy(true);
+    try {
+      await clearTestbed();
+      setTestbed([]);
+      setManeuver(null);
+      await loadTraffic();
+    } catch (err) {
+      setLoadError(err instanceof Error ? `Testbed: ${err.message}` : "Testbed clear failed");
+    } finally {
+      setTestbedBusy(false);
+    }
+  }, [loadTraffic]);
+
+  const onUsePair = useCallback((pair: TestbedPair) => {
+    setPrimaryId(pair.id);
+    setSecondaryId(pair.target_id);
+    setManeuver(null);
+    setManeuverError(null);
+    setResult(null);
+  }, []);
 
   const onDeselect = useCallback(() => {
     setSelectedId(null);
@@ -200,16 +250,13 @@ export default function App() {
           {loading ? " · updating" : ""}
         </p>
         <h1 className="brand">AetherGuard</h1>
-        <p className="tagline">
-          {primaryId && secondaryId
-            ? "Pair locked — only primary and secondary are shown on the globe."
-            : "Click any satellite to expand — set primary & secondary to focus the pair."}
-          {catalogMeta
-            ? ` ${catalogMeta.count} on orbit${catalogMeta.skipped ? ` (${catalogMeta.skipped} skipped)` : ""}.`
-            : ""}
-        </p>
+        {catalogMeta && (
+          <p className="hero-count">{catalogMeta.count} objects tracked</p>
+        )}
         {loadError && <p className="hero-error">{loadError}</p>}
       </header>
+
+      <Legend pairMode={Boolean(primaryId && secondaryId)} hasManeuver={Boolean(maneuver)} />
 
       <TrafficPanel
         traffic={traffic}
@@ -227,6 +274,11 @@ export default function App() {
         assessError={assessError}
         result={result}
         maneuver={maneuver}
+        testbed={testbed}
+        testbedBusy={testbedBusy}
+        onDeployTestbed={onDeployTestbed}
+        onClearTestbed={onClearTestbed}
+        onUsePair={onUsePair}
         maneuverBusy={maneuverBusy}
         maneuverError={maneuverError}
       />

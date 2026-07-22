@@ -203,6 +203,36 @@ class ManeuverPlanResponse(BaseModel):
     maneuvered_track: list[GeoMarker] = Field(description="Trajectory after the burn")
 
 
+class TestbedDeployRequest(BaseModel):
+    """Payload for ``POST /api/v1/testbed/deploy``."""
+
+    target_ids: list[str] | None = Field(
+        default=None,
+        description="Real catalog objects to aim at. Defaults to a LEO/GEO/HEO spread.",
+    )
+    target_time: datetime | None = Field(
+        default=None, description="Epoch the encounter is phased for. Defaults to now."
+    )
+    plane_offset_deg: Annotated[float, Field(gt=0, le=45)] = 5.0
+
+
+class TestbedPairInfo(BaseModel):
+    """One synthetic satellite and the object it is set to approach."""
+
+    id: str
+    name: str
+    target_id: str
+    target_name: str
+    tca: datetime = Field(description="When the encounter occurs — plan against this")
+    miss_distance_km: float
+    relative_speed_km_s: float
+
+
+class TestbedDeployResponse(BaseModel):
+    deployed: list[TestbedPairInfo]
+    epoch: datetime
+
+
 class MeshNodeSyncRequest(BaseModel):
     """Node telemetry ingested by the orbital mesh router."""
 

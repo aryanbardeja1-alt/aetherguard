@@ -4,6 +4,7 @@ import { Canvas, ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { Html, Line, OrbitControls, Stars } from "@react-three/drei";
 import * as THREE from "three";
 import type { AssessResponse, GeoMarker, ManeuverPlan, SkyTrafficSat } from "../api";
+import { OBJECT_TYPE, TRACK } from "../palette";
 
 const EARTH_R = 1;
 const EARTH_KM = 6378.137;
@@ -51,16 +52,7 @@ export function ecefKmToVec3(positionKm: number[], scale = EARTH_R): THREE.Vecto
 }
 
 function typeColor(objectType: string): string {
-  switch (objectType) {
-    case "station":
-      return "#d4a574";
-    case "visual":
-      return "#7eb8a8";
-    case "debris":
-      return "#e09b3d";
-    default:
-      return "#9aa8b5";
-  }
+  return OBJECT_TYPE[objectType as keyof typeof OBJECT_TYPE] ?? OBJECT_TYPE.active;
 }
 
 function markerSize(altKm: number, selected: boolean): number {
@@ -134,8 +126,8 @@ function ManeuverPaths({ plan }: { plan: ManeuverPlan }) {
   const burned = plan.delta_v_magnitude_m_s > 0;
   return (
     <group>
-      <OrbitPath points={plan.baseline_track} color="#e85d4c" dashed opacity={burned ? 0.55 : 0.9} />
-      {burned && <OrbitPath points={plan.maneuvered_track} color="#7eb8a8" lineWidth={2.4} />}
+      <OrbitPath points={plan.baseline_track} color={TRACK.baseline} dashed opacity={burned ? 0.55 : 0.9} />
+      {burned && <OrbitPath points={plan.maneuvered_track} color={TRACK.maneuvered} lineWidth={2.4} />}
       {burned && plan.maneuvered_track.length > 0 && (
         <BurnMarker point={plan.maneuvered_track[0]} />
       )}
@@ -150,7 +142,7 @@ function BurnMarker({ point }: { point: GeoMarker }) {
     <group position={pos}>
       <mesh>
         <sphereGeometry args={[0.022, 12, 12]} />
-        <meshStandardMaterial color="#f0d98c" emissive="#f0d98c" emissiveIntensity={0.8} />
+        <meshStandardMaterial color={TRACK.burn} emissive={TRACK.burn} emissiveIntensity={0.8} />
       </mesh>
       <Html distanceFactor={9} style={{ pointerEvents: "none" }} zIndexRange={[100, 0]}>
         <div className="sat-tag burn">burn</div>
@@ -213,7 +205,7 @@ function TrafficMarker({
 }) {
   const ref = useRef<THREE.Mesh>(null);
   const color =
-    role === "primary" ? "#d4a574" : role === "secondary" ? "#7eb8a8" : typeColor(sat.object_type);
+    role === "primary" ? TRACK.primary : role === "secondary" ? TRACK.secondary : typeColor(sat.object_type);
   const highlighted = selected || Boolean(role);
   const pos = latLonToVec3(sat.lat_deg, sat.lon_deg, sat.alt_km);
   const size = markerSize(sat.alt_km, highlighted);
@@ -377,13 +369,13 @@ export default function GlobeScene({
         />
       ))}
       {!pairMode && selectedTrack.length > 0 && (
-        <OrbitPath points={selectedTrack} color="#d4a574" />
+        <OrbitPath points={selectedTrack} color={TRACK.primary} />
       )}
       {pairMode && primaryTrack.length > 0 && (
-        <OrbitPath points={primaryTrack} color="#d4a574" />
+        <OrbitPath points={primaryTrack} color={TRACK.primary} />
       )}
       {pairMode && secondaryTrack.length > 0 && (
-        <OrbitPath points={secondaryTrack} color="#7eb8a8" />
+        <OrbitPath points={secondaryTrack} color={TRACK.secondary} />
       )}
       {maneuver && <ManeuverPaths plan={maneuver} />}
       {result?.primary && result?.secondary && (

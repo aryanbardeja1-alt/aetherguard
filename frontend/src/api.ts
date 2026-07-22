@@ -69,6 +69,21 @@ export type ManeuverPlan = {
   maneuvered_track: GeoMarker[];
 };
 
+export type TestbedPair = {
+  id: string;
+  name: string;
+  target_id: string;
+  target_name: string;
+  tca: string;
+  miss_distance_km: number;
+  relative_speed_km_s: number;
+};
+
+export type TestbedDeployResponse = {
+  deployed: TestbedPair[];
+  epoch: string;
+};
+
 async function readError(res: Response): Promise<string> {
   try {
     const body = await res.json();
@@ -104,6 +119,7 @@ export async function assessConjunction(payload: unknown): Promise<AssessRespons
 export async function planManeuver(
   primaryId: string,
   secondaryId: string,
+  targetTime?: string,
 ): Promise<ManeuverPlan> {
   const res = await fetch("/api/v1/plan-maneuver", {
     method: "POST",
@@ -112,10 +128,26 @@ export async function planManeuver(
       primary_id: primaryId,
       secondary_id: secondaryId,
       hbr_meters: 20,
+      ...(targetTime ? { target_time: targetTime } : {}),
     }),
   });
   if (!res.ok) throw new Error(await readError(res));
   return res.json();
+}
+
+export async function deployTestbed(): Promise<TestbedDeployResponse> {
+  const res = await fetch("/api/v1/testbed/deploy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export async function clearTestbed(): Promise<void> {
+  const res = await fetch("/api/v1/testbed/deploy", { method: "DELETE" });
+  if (!res.ok) throw new Error(await readError(res));
 }
 
 export async function checkHealth(): Promise<boolean> {

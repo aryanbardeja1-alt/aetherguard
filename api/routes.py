@@ -8,7 +8,13 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
 from aether_core import ConjunctionEvent
-from engine.catalog import get_entry, load_catalog
+from engine import testbed
+from engine.catalog import (
+    clear_runtime_objects,
+    get_entry,
+    load_catalog,
+    register_runtime_objects,
+)
 from engine.collision import CovarianceError, assess_collision, classify_risk
 from engine.geo import gmst_radians, teme_to_ecef, teme_to_latlon_alt
 from engine.propagator import PropagationError, propagate_tle, relative_state
@@ -26,6 +32,9 @@ from schemas.conjunction import (
     RiskLevel,
     SkyTrafficObject,
     SkyTrafficResponse,
+    TestbedDeployRequest,
+    TestbedDeployResponse,
+    TestbedPairInfo,
 )
 
 router = APIRouter()
@@ -301,6 +310,66 @@ def orbit_track(payload: OrbitTrackRequest) -> OrbitTrackResponse:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return OrbitTrackResponse(name=payload.tle.name, points=points)
+
+
+@router.post("/api/v1/testbed/deploy", response_model=TestbedDeployResponse)
+def testbed_deploy(payload: TestbedDeployRequest) -> TestbedDeployResponse:
+    """Deploy AETHERGUARD satellites on conjunction courses with real objects.
+
+    Nothing in the live catalog actually conjuncts, so the maneuver planner has
+    nothing to act on. These are derived from real TLEs — same altitude, tilted
+    plane, phased to meet — and exist only in memory.
+    """
+    when = payload.target_time or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+
+    target_ids = payload.target_ids or list(testbed.DEFAULT_TARGET_IDS)
+    targets: list[dict] = []
+    for target_id in target_ids:
+        entry = get_entry(target_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown target satellite id '{target_id}'."
+            )
+        targets.append(entry)
+
+    try:
+        clear_runtime_objects()
+        pairs = testbed.deploy(
+            targets, when, plane_offset_deg=payload.plane_offset_deg
+        )
+    except PropagationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500, detail=f"Testbed deployment failed: {exc}"
+        ) from exc
+
+    register_runtime_objects([pair.satellite for pair in pairs])
+
+    return TestbedDeployResponse(
+        epoch=when,
+        deployed=[
+            TestbedPairInfo(
+                id=str(pair.satellite["id"]),
+                name=str(pair.satellite["name"]),
+                target_id=pair.target_id,
+                target_name=pair.target_name,
+                tca=pair.tca,
+                miss_distance_km=pair.miss_distance_km,
+                relative_speed_km_s=pair.relative_speed_km_s,
+            )
+            for pair in pairs
+        ],
+    )
+
+
+@router.delete("/api/v1/testbed/deploy")
+def testbed_clear() -> dict[str, str]:
+    """Remove every deployed AETHERGUARD satellite."""
+    clear_runtime_objects()
+    return {"status": "cleared"}
 
 
 @router.post("/api/v1/plan-maneuver", response_model=ManeuverPlanResponse)
